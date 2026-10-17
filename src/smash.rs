@@ -7,8 +7,8 @@ use crate::dev::Script;
 use crate::guard::Walkable;
 use crate::inventory::{Inventory, Kind};
 use crate::map::{Map, Wall, deco, tile_centre, tile_of};
-use crate::movement::{Solids, TILE};
-use crate::player::{Player, Swing};
+use crate::movement::TILE;
+use crate::player::{Level, LocalPlayer, Player, Swing};
 use crate::render::WorldMaterials;
 use crate::sight::Sight;
 use crate::sound::{Clip, Noise};
@@ -25,10 +25,7 @@ pub struct SmashPlugin;
 
 impl Plugin for SmashPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            Update,
-            smash.run_if(resource_exists::<Player>.and_then(resource_exists::<Bank>)),
-        );
+        app.add_systems(Update, smash.run_if(resource_exists::<Bank>));
     }
 }
 
@@ -49,15 +46,14 @@ fn window(map: &Map, pos: Vec2, heading: f32) -> Option<(i32, i32)> {
 fn smash(
     mouse: Res<ButtonInput<MouseButton>>,
     script: Res<Script>,
-    inventory: Res<Inventory>,
-    mut player: ResMut<Player>,
+    me: Single<(&Player, &Inventory, &mut Swing), With<LocalPlayer>>,
     mut bank: ResMut<Bank>,
-    mut swing: ResMut<Swing>,
     world_materials: Res<WorldMaterials>,
     mut images: ResMut<Assets<Image>>,
     mut noises: MessageWriter<Noise>,
     mut commands: Commands,
 ) {
+    let (player, inventory, mut swing) = me.into_inner();
     let click = mouse.just_pressed(MouseButton::Left) || script.pressed("Smash");
     if inventory.open || !inventory.holds(Kind::Crowbar) || !click {
         return;
@@ -74,7 +70,7 @@ fn smash(
         at: tile_centre(x, y),
         loud: LOUD,
     });
-    player.solids = Solids::new(map.bounds(), map.solids());
+    commands.insert_resource(Level::new(map));
     commands.insert_resource(Walkable::new(map));
     commands.insert_resource(Sight::new(map));
     if let Some(mut image) = images.get_mut(&world_materials.tiles)
@@ -90,6 +86,7 @@ fn smash(
 mod tests {
     use super::*;
     use crate::map::generate;
+    use crate::movement::Solids;
     use std::f32::consts::FRAC_PI_2;
 
     #[test]

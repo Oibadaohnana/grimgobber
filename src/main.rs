@@ -17,15 +17,17 @@ mod smash;
 mod sound;
 mod throw;
 
+use bevy::app::ScheduleRunnerPlugin;
 use bevy::camera::Hdr;
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
+use bevy::log::LogPlugin;
 use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
 use bevy::window::{PresentMode, WindowMode, WindowResolution};
+use std::time::Duration;
 
-use crate::movement::{Body, Solids};
-use crate::player::{Player, PlayerPlugin, spawn_robber};
+use crate::player::{Controls, Level, LocalPlayer, Player, PlayerPlugin, spawn_robber};
 use crate::render::{Lamps, RenderPlugin, WorldMaterial, WorldMaterials, WorldPart};
 
 #[derive(Resource)]
@@ -42,14 +44,32 @@ struct Current {
 #[derive(Component)]
 struct Hud;
 
+/// A headless server: nobody plays on it, nothing is drawn.
+#[derive(Resource)]
+struct Headless;
+
+/// Whether this app draws what it runs, which a server does not.
+pub fn drawn(app: &App) -> bool {
+    app.is_plugin_added::<WindowPlugin>()
+}
+
 fn main() {
     let seed = dev::env("BB_SEED")
         .and_then(|s| s.parse().ok())
         .unwrap_or_else(clock_seed);
-    let (w, h) = dev::window_size();
-    let smoke = dev::smoke_frames().is_some();
-    App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
+    let mut app = App::new();
+    if std::env::args().any(|a| a == "--server") {
+        app.add_plugins((
+            MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(Duration::from_secs_f64(
+                movement::STEP as f64,
+            ))),
+            LogPlugin::default(),
+        ))
+        .insert_resource(Headless);
+    } else {
+        let (w, h) = dev::window_size();
+        let smoke = dev::smoke_frames().is_some();
+        app.add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "Bank Bobbery".into(),
                 resolution: WindowResolution::new(w, h),
@@ -65,9 +85,6 @@ fn main() {
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
         .add_plugins((
             RenderPlugin,
-            PlayerPlugin,
-            doors::DoorsPlugin,
-            guard::GuardPlugin,
             sound::SoundPlugin,
             hearing::HearingPlugin,
             inventory_ui::InventoryUiPlugin,
@@ -75,14 +92,36 @@ fn main() {
             throw::ThrowPlugin,
             prompt::PromptPlugin,
             guns::GunsPlugin,
-            dev::DevPlugin,
         ))
         .insert_resource(ClearColor(Color::srgb(0.01, 0.012, 0.02)))
-        .insert_resource(NewMap(Some(seed)))
         .init_resource::<WorldMaterials>()
         .init_resource::<Lamps>()
         .add_systems(Startup, setup)
-        .add_systems(Update, (keys, build_map, hud).chain())
+        .add_systems(
+            Update,
+            (
+                keys.before(build_map),
+                (
+                    draw_map.run_if(resource_exists_and_changed::<Current>),
+                    player::dress,
+                    guard::dress,
+                    doors::dress,
+                    hud,
+                )
+                    .chain()
+                    .after(build_map),
+            ),
+        );
+    }
+    app.add_message::<sound::Noise>()
+        .add_plugins((
+            PlayerPlugin,
+            doors::DoorsPlugin,
+            guard::GuardPlugin,
+            dev::DevPlugin,
+        ))
+        .insert_resource(NewMap(Some(seed)))
+        .add_systems(Update, build_map)
         .run();
 }
 
@@ -131,11 +170,12 @@ fn setup(mut commands: Commands) {
 
 fn keys(
     input: Res<ButtonInput<KeyCode>>,
+    script: Res<dev::Script>,
     current: Option<Res<Current>>,
     mut new_map: ResMut<NewMap>,
     mut window: Query<&mut Window>,
 ) {
-    if input.just_pressed(KeyCode::F5) {
+    if input.just_pressed(KeyCode::F5) || script.pressed("NewBank") {
         let next = current.map_or(1, |c| {
             c.seed
                 .wrapping_mul(6364136223846793005)
@@ -154,16 +194,11 @@ fn keys(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn build_map(
     mut commands: Commands,
     mut new_map: ResMut<NewMap>,
+    headless: Option<Res<Headless>>,
     old: Query<Entity, With<WorldPart>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut images: ResMut<Assets<Image>>,
-    mut materials: ResMut<Assets<WorldMaterial>>,
-    mut world_materials: ResMut<WorldMaterials>,
-    mut lamps: ResMut<Lamps>,
 ) {
     let Some(seed) = new_map.0.take() else {
         return;
@@ -172,52 +207,19 @@ fn build_map(
         commands.entity(e).despawn();
     }
     let map = map::generate(seed);
-    render::spawn_map(
-        &mut commands,
-        &map,
-        &mut meshes,
-        &mut images,
-        &mut materials,
-        &mut world_materials,
-        &mut lamps,
-    );
-    doors::spawn_doors(
-        &mut commands,
-        &mut meshes,
-        render::things_material(&world_materials),
-        &map,
-    );
-    guard::spawn_guard(
-        &mut commands,
-        &mut meshes,
-        render::things_material(&world_materials),
-        render::ghost_material(&world_materials),
-        &map,
-    );
+    doors::spawn_doors(&mut commands, &map);
+    guard::spawn_guard(&mut commands, &map);
     commands.insert_resource(sight::Sight::new(&map));
+    commands.insert_resource(doors::Shut::new(&map));
+    commands.insert_resource(Level::new(&map));
     let spawn = dev::tile("BB_SPAWN").unwrap_or(map.spawn);
-    spawn_robber(
-        &mut commands,
-        &mut meshes,
-        render::things_material(&world_materials),
-        spawn,
-    );
-    commands.insert_resource(Player {
-        body: Body::new(spawn, std::f32::consts::FRAC_PI_2),
-        solids: Solids::new(map.bounds(), map.solids()),
-        cover: map
-            .props
-            .iter()
-            .filter(|p| p.kind.is_low())
-            .map(|p| p.body)
-            .collect(),
-        hideouts: map
-            .props
-            .iter()
-            .filter(|p| p.kind.is_hideout())
-            .map(|p| p.block)
-            .collect(),
-    });
+    if headless.is_none() {
+        spawn_robber(&mut commands, spawn, true);
+    }
+    for (i, at) in dev::crew(&map, spawn).into_iter().enumerate() {
+        let bot = spawn_robber(&mut commands, at, false);
+        commands.entity(bot).insert(dev::Bot(i as f32 * 1.7));
+    }
     let current = Current {
         seed,
         rooms: map.rooms.len(),
@@ -232,22 +234,50 @@ fn build_map(
     commands.insert_resource(smash::Bank(map));
 }
 
+fn draw_map(
+    mut commands: Commands,
+    bank: Res<smash::Bank>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut images: ResMut<Assets<Image>>,
+    mut materials: ResMut<Assets<WorldMaterial>>,
+    mut world_materials: ResMut<WorldMaterials>,
+    mut lamps: ResMut<Lamps>,
+) {
+    render::spawn_map(
+        &mut commands,
+        &bank.0,
+        &mut meshes,
+        &mut images,
+        &mut materials,
+        &mut world_materials,
+        &mut lamps,
+    );
+}
+
+type Me<'a> = (
+    Entity,
+    &'a Player,
+    &'a Controls,
+    &'a guns::Gunplay,
+    &'a inventory::Inventory,
+);
+
 #[allow(clippy::too_many_arguments)]
 fn hud(
     current: Option<Res<Current>>,
-    player: Option<Res<Player>>,
-    controls: Res<player::Controls>,
+    level: Option<Res<Level>>,
+    me: Single<Me, With<LocalPlayer>>,
+    guards: Query<&guard::Guard>,
     order: Res<guard::Order>,
-    spotted: Res<guard::Spotted>,
     heard: Res<guard::Heard>,
-    gun: Res<guns::Gunplay>,
-    inventory: Res<inventory::Inventory>,
     diagnostics: Res<DiagnosticsStore>,
     mut text: Query<&mut Text, With<Hud>>,
 ) {
-    let (Some(current), Some(player), Ok(mut text)) = (current, player, text.single_mut()) else {
+    let (Some(current), Some(level), Ok(mut text)) = (current, level, text.single_mut()) else {
         return;
     };
+    let (me, player, controls, gun, inventory) = *me;
+    let spotted = guards.iter().any(|g| g.watching(me));
     let fps = diagnostics
         .get(&FrameTimeDiagnosticsPlugin::FPS)
         .and_then(|d| d.smoothed())
@@ -255,9 +285,9 @@ fn hud(
     let b = &player.body;
     let state = if b.is_rolling() {
         "rolling"
-    } else if player.hidden() {
+    } else if level.hideout(b.pos).is_some() {
         "hidden in the plants"
-    } else if player.in_cover() {
+    } else if level.in_cover(b) {
         "crouching, in cover"
     } else if b.is_crouching() {
         "crouching"
@@ -274,7 +304,7 @@ fn hud(
     } else {
         "ready"
     };
-    let guard = match (order.0, spotted.0) {
+    let guard = match (order.0, spotted) {
         (true, _) => "   click where the guard goes",
         (_, true) => "   THE GUARD SEES YOU",
         _ if heard.0 => "   the guard heard something",

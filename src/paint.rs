@@ -771,9 +771,13 @@ pub fn door_leaf(kind: DoorKind) -> Mesh {
     g.build()
 }
 
-pub fn robber() -> RobberParts {
+/// Fading, if he is not the robber looking.
+pub fn robber(fades: bool) -> RobberParts {
     let build = |f: &dyn Fn(&mut Painter)| {
-        let mut g = Painter::default();
+        let mut g = Painter {
+            fades,
+            ..Painter::default()
+        };
         f(&mut g);
         g.build()
     };

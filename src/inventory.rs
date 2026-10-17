@@ -3,7 +3,7 @@
 //! hands or put it away.
 
 use bevy::math::{IVec2, ivec2};
-use bevy::prelude::Resource;
+use bevy::prelude::Component;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Kind {
@@ -78,7 +78,7 @@ impl Item {
 /// The inventory's cells, across and down.
 pub const GRID: IVec2 = ivec2(8, 5);
 
-#[derive(Resource)]
+#[derive(Component)]
 pub struct Inventory {
     pub items: Vec<Item>,
     /// Item indices bound to keys 1–4.

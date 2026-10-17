@@ -8,8 +8,8 @@ use crate::guard::Guard;
 use crate::map::{Door, DoorKind, Map, tile_centre};
 use crate::movement::{BODY_MARGIN, TILE};
 use crate::paint;
-use crate::player::{Controls, Player, Reach};
-use crate::render::{WorldMaterial, WorldMaterials, WorldPart};
+use crate::player::{Controls, Level, LocalPlayer, Player, Reach};
+use crate::render::{WorldMaterials, WorldPart, things_material};
 use crate::sight::Sight;
 use crate::sound::{Clip, Noise};
 use bevy::prelude::*;
@@ -24,6 +24,23 @@ const CLOSING: f32 = 0.4;
 /// How far off a guard hears the robber at a door, in tiles (crouched, not at all).
 const LOUD: f32 = 4.0;
 
+/// Per tile, as the doors texture holds it: how shut, lying along x, glass, 0.
+#[derive(Resource)]
+pub struct Shut(pub Vec<u8>);
+
+impl Shut {
+    pub fn new(map: &Map) -> Self {
+        let mut shut = vec![0u8; map.tiles.len() * 4];
+        for d in map.doors() {
+            let i = map.idx(d.x, d.y) * 4;
+            shut[i] = 255;
+            shut[i + 1] = if d.along.x != 0.0 { 255 } else { 0 };
+            shut[i + 2] = if d.kind == DoorKind::Glass { 255 } else { 0 };
+        }
+        Shut(shut)
+    }
+}
+
 #[derive(Component)]
 pub struct Leaf {
     door: Door,
@@ -33,27 +50,27 @@ pub struct Leaf {
     shown: f32,
     /// Which way across the wall it swings, picked as it starts to open.
     side: f32,
-    /// Opened by the robber, whose arm goes out to it.
-    robber: bool,
+    /// The robber who opened it, whose arm goes out to it.
+    robber: Option<Entity>,
 }
 
 pub struct DoorsPlugin;
 
 impl Plugin for DoorsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            Update,
-            swing.run_if(resource_exists::<Player>.and_then(resource_exists::<Sight>)),
-        );
+        app.add_systems(Update, swing.run_if(resource_exists::<Level>));
+        if crate::drawn(app) {
+            app.add_systems(
+                Update,
+                (upload, show)
+                    .after(swing)
+                    .run_if(resource_exists::<Shut>.and_then(resource_exists::<Sight>)),
+            );
+        }
     }
 }
 
-pub fn spawn_doors(
-    commands: &mut Commands,
-    meshes: &mut Assets<Mesh>,
-    material: Handle<WorldMaterial>,
-    map: &Map,
-) {
+pub fn spawn_doors(commands: &mut Commands, map: &Map) {
     for door in map.doors() {
         commands.spawn((
             WorldPart,
@@ -63,12 +80,25 @@ pub fn spawn_doors(
                 open: 0.0,
                 shown: 0.0,
                 side: 1.0,
-                robber: false,
+                robber: None,
             },
-            Mesh2d(meshes.add(paint::door_leaf(door.kind))),
-            MeshMaterial2d(material.clone()),
-            Transform::from_translation(door.hinge.extend(5.0))
-                .with_rotation(Quat::from_rotation_z(door.along.to_angle())),
+        ));
+    }
+}
+
+pub fn dress(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    world_materials: Res<WorldMaterials>,
+    leaves: Query<(Entity, &Leaf), Added<Leaf>>,
+) {
+    for (e, leaf) in &leaves {
+        let d = leaf.door;
+        commands.entity(e).insert((
+            Mesh2d(meshes.add(paint::door_leaf(d.kind))),
+            MeshMaterial2d(things_material(&world_materials)),
+            Transform::from_translation(d.hinge.extend(5.0))
+                .with_rotation(Quat::from_rotation_z(d.along.to_angle())),
         ));
     }
 }
@@ -83,27 +113,25 @@ fn near_side(d: Door, eye: Vec2) -> Vec2 {
 #[allow(clippy::too_many_arguments)]
 fn swing(
     time: Res<Time>,
-    player: Res<Player>,
-    controls: Res<Controls>,
-    sight: Res<Sight>,
+    me: Option<Single<&Player, With<LocalPlayer>>>,
+    mut robbers: Query<(Entity, &Player, &mut Reach)>,
     guards: Query<&Guard>,
-    mut reach: ResMut<Reach>,
-    world_materials: Res<WorldMaterials>,
-    mut images: ResMut<Assets<Image>>,
-    mut leaves: Query<(&mut Leaf, &mut Transform)>,
+    mut shut: ResMut<Shut>,
+    mut leaves: Query<&mut Leaf>,
     mut noises: MessageWriter<Noise>,
 ) {
-    let walkers: Vec<_> = std::iter::once(&player.body)
-        .chain(guards.iter().map(|g| &g.body))
-        .map(|b| (b.pos, b.speed))
+    let walkers: Vec<_> = robbers
+        .iter()
+        .map(|(e, p, _)| (Some(e), &p.body))
+        .chain(guards.iter().map(|g| (None, &g.body)))
+        .map(|(e, b)| (e, b.pos, b.speed, b.is_crouching()))
         .collect();
     let dt = time.delta_secs();
-    let mut moved = Vec::new();
-    for (mut leaf, _) in &mut leaves {
+    for mut leaf in &mut leaves {
         let d = leaf.door;
         let centre = tile_centre(d.x, d.y);
         let by_hand = d.kind != DoorKind::Glass;
-        let opener = walkers.iter().enumerate().find_map(|(i, &(pos, speed))| {
+        let opener = walkers.iter().find_map(|&(robber, pos, speed, _)| {
             let off = pos - centre;
             let gap = off.dot(d.across).abs();
             let near = if by_hand {
@@ -111,7 +139,7 @@ fn swing(
             } else {
                 off.length() < SENSOR
             };
-            near.then_some((i == 0, off, gap, speed))
+            near.then_some((robber, off, gap, speed))
         });
         let near = opener.is_some();
         let was = leaf.open;
@@ -122,23 +150,27 @@ fn swing(
             leaf.robber = robber;
         }
         let (opens, shuts) = (near && was == 0.0, !near && was == 1.0);
-        if by_hand && leaf.robber && (opens || shuts) {
+        if by_hand
+            && (opens || shuts)
+            && let Some((_, _, mut reach)) = leaf.robber.and_then(|e| robbers.get_mut(e).ok())
+        {
             reach.0 = Some((centre, 0.0));
         }
+        let quiet = walkers
+            .iter()
+            .find(|w| w.0.is_some() && w.0 == leaf.robber)
+            .is_none_or(|w| w.3);
         if opens || shuts {
             let clip = if opens {
                 Clip::DoorOpen
             } else {
                 Clip::DoorClose
             };
+            let ear = me.as_ref().map_or(centre, |p| p.body.pos);
             noises.write(Noise {
                 clip: Some(clip),
-                at: near_side(d, player.body.pos),
-                loud: if leaf.robber && !player.body.is_crouching() {
-                    LOUD
-                } else {
-                    0.0
-                },
+                at: near_side(d, ear),
+                loud: if quiet { 0.0 } else { LOUD },
             });
         }
         // Coming at it fast, it is shoved open in time.
@@ -148,23 +180,31 @@ fn swing(
         };
         leaf.open += (goal - was).clamp(-dt / rate, dt / rate);
         if leaf.open != was {
-            moved.push((leaf.tile, leaf.open));
+            shut.0[leaf.tile * 4] = ((1.0 - leaf.open) * 255.0) as u8;
         }
     }
-    if !moved.is_empty()
+}
+
+fn upload(
+    shut: Res<Shut>,
+    world_materials: Res<WorldMaterials>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    if shut.is_changed()
         && let Some(mut image) = images.get_mut(&world_materials.doors)
-        && let Some(data) = image.data.as_mut()
     {
-        for (tile, open) in moved {
-            data[tile * 4] = ((1.0 - open) * 255.0) as u8;
-        }
+        image.data = Some(shut.0.clone());
     }
-    let Some(doors) = images
-        .get(&world_materials.doors)
-        .and_then(|i| i.data.as_deref())
-    else {
-        return;
-    };
+}
+
+fn show(
+    me: Single<(&Player, &Controls), With<LocalPlayer>>,
+    sight: Res<Sight>,
+    shut: Res<Shut>,
+    mut leaves: Query<(&mut Leaf, &mut Transform)>,
+) {
+    let doors = &shut.0;
+    let (player, controls) = *me;
     let b = &player.body;
     for (mut leaf, mut t) in &mut leaves {
         if leaf.shown == leaf.open {

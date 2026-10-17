@@ -3,8 +3,8 @@
 //! (`Sight::carry`, round corners and weakly through walls). Drawn tile by
 //! tile into a texture the shader draws the ring from.
 
+use crate::doors::Shut;
 use crate::movement::Body;
-use crate::player::Player;
 use crate::render::WorldMaterials;
 use crate::sight::{Sight, smoothstep};
 use crate::sound::{Clip, Noise};
@@ -43,7 +43,7 @@ impl Plugin for HearingPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Ripples>().add_systems(
             Update,
-            ripple.run_if(resource_exists::<Player>.and_then(resource_exists::<Sight>)),
+            ripple.run_if(resource_exists::<Shut>.and_then(resource_exists::<Sight>)),
         );
     }
 }
@@ -52,6 +52,7 @@ fn ripple(
     time: Res<Time>,
     sight: Res<Sight>,
     world_materials: Res<WorldMaterials>,
+    shut: Res<Shut>,
     mut images: ResMut<Assets<Image>>,
     mut noises: MessageReader<Noise>,
     mut ripples: ResMut<Ripples>,
@@ -67,12 +68,7 @@ fn ripple(
             .filter(|n| matches!(n.clip, Some(Clip::Glass | Clip::Coin)))
             .map(|n| (n.at, n.loud, 0.0)),
     );
-    let Some(doors) = images
-        .get(&world_materials.doors)
-        .and_then(|i| i.data.clone())
-    else {
-        return;
-    };
+    let doors = &shut.0;
     let shown = ripples.0.iter().map(|&(at, loud, age)| {
         let strength = 1.0 - smoothstep(FADE.0, FADE.1, age);
         (at, loud * (age / SPREAD).min(1.0), strength)
@@ -90,7 +86,7 @@ fn ripple(
         if reach <= 0.0 {
             continue;
         }
-        for (i, left) in sight.carry(at, reach, &doors).into_iter().enumerate() {
+        for (i, left) in sight.carry(at, reach, doors).into_iter().enumerate() {
             if left > 0.0 && i * 4 + 1 < data.len() {
                 let left = ((left * STEPS).min(255.0) as u8).max(1);
                 data[i * 4] = data[i * 4].max(left);

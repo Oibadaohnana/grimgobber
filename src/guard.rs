@@ -5,12 +5,14 @@
 //! "?" marks the spot. Come at from behind, E knocks him out for a while.
 
 use crate::dev;
+use crate::doors::Shut;
 use crate::hearing::feet;
+use crate::inventory::Inventory;
 use crate::map::{Map, RoomKind, tile_centre, tile_of};
 use crate::movement::{BODY_MARGIN, Body, MARCH_SPEED, STEP, Solids, Steer, TILE, approach};
 use crate::paint;
-use crate::player::{Controls, Player, Reach, Shown};
-use crate::render::{WorldMaterial, WorldMaterials, WorldPart};
+use crate::player::{Controls, Level, LocalPlayer, Player, Reach, Shown};
+use crate::render::{WorldMaterials, WorldPart, ghost_material, things_material};
 use crate::sight::{DARK, Sight, VIEW, smoothstep};
 use crate::sound::{Clip, Noise};
 use bevy::prelude::*;
@@ -49,6 +51,7 @@ pub struct Guard {
     /// Tile centres to walk through, the next last.
     path: Vec<Vec2>,
     pub sees: bool,
+    target: Option<Entity>,
     /// Where the robber was and which way he was going when last known,
     /// until the guard gets there, and how long since he saw him.
     last_seen: Option<(Vec2, f32)>,
@@ -111,10 +114,6 @@ pub struct Walkable {
 #[derive(Resource, Default)]
 pub struct Order(pub bool);
 
-/// A guard sees the robber.
-#[derive(Resource, Default)]
-pub struct Spotted(pub bool);
-
 /// A guard goes to see what he heard.
 #[derive(Resource, Default)]
 pub struct Heard(pub bool);
@@ -124,40 +123,69 @@ pub struct GuardPlugin;
 impl Plugin for GuardPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Order>()
-            .init_resource::<Spotted>()
             .init_resource::<Heard>()
+            .add_systems(FixedUpdate, walk.run_if(resource_exists::<Level>))
             .add_systems(
+                Update,
+                detect.run_if(resource_exists::<Level>.and_then(resource_exists::<Sight>)),
+            );
+        if crate::drawn(app) {
+            app.add_systems(
                 PreUpdate,
                 order
                     .after(bevy::input::InputSystems)
                     .run_if(resource_exists::<Walkable>),
             )
-            .add_systems(FixedUpdate, walk.run_if(resource_exists::<Player>))
             .add_systems(
                 Update,
-                (knock, show, detect, alarm, ghost, puzzled, asleep)
-                    .chain()
-                    .run_if(resource_exists::<Player>.and_then(resource_exists::<Sight>)),
+                (
+                    knock.before(detect),
+                    (show, alarm, ghost, puzzled, asleep).chain().after(detect),
+                )
+                    .run_if(resource_exists::<Level>.and_then(resource_exists::<Sight>)),
             );
+        }
     }
 }
 
-pub fn spawn_guard(
+pub fn spawn_guard(commands: &mut Commands, map: &Map) {
+    let at = dev::tile("BB_GUARD").unwrap_or_else(|| post(map, &map.free()));
+    commands.spawn((WorldPart, Guard::new(at)));
+    commands.insert_resource(Walkable::new(map));
+}
+
+/// His picture, and the marks over him and where he looks.
+pub fn dress(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    world_materials: Res<WorldMaterials>,
+    guards: Query<(Entity, &Guard), Added<Guard>>,
+) {
+    for (guard, g) in &guards {
+        dress_one(
+            &mut commands,
+            &mut meshes,
+            &world_materials,
+            guard,
+            g.body.pos,
+        );
+    }
+}
+
+fn dress_one(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
-    material: Handle<WorldMaterial>,
-    ghost: Handle<WorldMaterial>,
-    map: &Map,
+    world_materials: &WorldMaterials,
+    guard: Entity,
+    at: Vec2,
 ) {
-    let free = map.free();
-    let at = dev::tile("BB_GUARD").unwrap_or_else(|| post(map, &free));
     let p = paint::guard();
     let [foot, arm, glove] = [p.foot, p.arm, p.glove].map(|m| Mesh2d(meshes.add(m)));
-    let mat = MeshMaterial2d(material);
-    let guard = commands
-        .spawn((
-            WorldPart,
-            Guard::new(at),
+    let mat = MeshMaterial2d(things_material(world_materials));
+    let ghost = ghost_material(world_materials);
+    commands
+        .entity(guard)
+        .insert((
             Transform::from_translation(at.extend(9.0)),
             Visibility::default(),
         ))
@@ -207,10 +235,9 @@ pub fn spawn_guard(
                 mat.clone(),
                 Transform::from_xyz(2.0, 0.0, 0.5),
             ));
-        })
-        .id();
+        });
     // The robber standing, without his tools.
-    let r = paint::robber();
+    let r = paint::robber(false);
     let parts = [
         (r.foot.clone(), vec3(0.0, -8.0, -0.6), 0.0),
         (r.foot, vec3(0.0, 8.0, -0.6), 0.0),
@@ -260,7 +287,6 @@ pub fn spawn_guard(
         Transform::from_xyz(0.0, 0.0, 30.0),
         Visibility::Hidden,
     ));
-    commands.insert_resource(Walkable::new(map));
 }
 
 /// The free tile nearest the middle of the security room, else the lobby.
@@ -374,6 +400,7 @@ impl Guard {
             body: Body::new(at, -FRAC_PI_2),
             path: Vec::new(),
             sees: false,
+            target: None,
             last_seen: None,
             unseen: 0.0,
             heard: None,
@@ -403,6 +430,10 @@ impl Guard {
     /// Where his shot leaves his pistol, out in his left hand.
     pub fn muzzle(&self) -> Vec2 {
         self.body.pos + Vec2::from_angle(self.body.heading) * (GRIP + 16.0)
+    }
+
+    pub fn watching(&self, e: Entity) -> bool {
+        self.sees && self.target == Some(e)
     }
 
     pub fn awake(&self) -> bool {
@@ -527,7 +558,7 @@ fn order(
     window: Query<&Window, With<PrimaryWindow>>,
     camera: Query<(&Camera, &GlobalTransform)>,
     walkable: Res<Walkable>,
-    inventory: Res<crate::inventory::Inventory>,
+    inventory: Single<&Inventory, With<LocalPlayer>>,
     mut armed: ResMut<Order>,
     mut guards: Query<&mut Guard>,
 ) {
@@ -555,9 +586,9 @@ fn order(
     }
 }
 
-fn walk(player: Res<Player>, mut guards: Query<&mut Guard>) {
+fn walk(level: Res<Level>, mut guards: Query<&mut Guard>) {
     for mut g in &mut guards {
-        g.step(&player.solids);
+        g.step(&level.solids);
     }
 }
 
@@ -614,62 +645,68 @@ fn show(
 /// His flashlight on, he is lit, as world.wgsl's `watched` finds it.
 #[allow(clippy::too_many_arguments)]
 pub fn detect(
-    player: Res<Player>,
-    controls: Res<Controls>,
+    robbers: Query<(Entity, &Player, &Controls)>,
+    level: Res<Level>,
     sight: Res<Sight>,
     walkable: Res<Walkable>,
     mut guards: Query<&mut Guard>,
-    world_materials: Res<WorldMaterials>,
-    images: Res<Assets<Image>>,
+    shut: Res<Shut>,
     time: Res<Time>,
     mut noises: MessageReader<Noise>,
-    mut spotted: ResMut<Spotted>,
     mut heard: ResMut<Heard>,
 ) {
-    let Some(doors) = images
-        .get(&world_materials.doors)
-        .and_then(|i| i.data.as_deref())
-    else {
-        return;
-    };
-    let b = &player.body;
-    let reach = if controls.torch || sight.lit_at(b.pos) {
-        GUARD_VIEW
-    } else {
-        DARK
-    };
-    spotted.0 = false;
+    let doors = &shut.0;
     heard.0 = false;
     let dt = time.delta_secs();
-    // What there is to hear: noises made this frame, and his feet.
-    let mut sounds: Vec<(Vec2, f32)> = noises
+    // What there is to hear: noises made this frame, and the robbers' feet.
+    let sounds: Vec<(Vec2, f32)> = noises
         .read()
         .filter(|n| n.loud > 0.0)
         .map(|n| (n.at, n.loud))
+        .chain(robbers.iter().map(|(_, p, _)| (p.body.pos, feet(&p.body))))
+        .filter(|&(_, loud)| loud > 0.0)
         .collect();
-    if feet(b) > 0.0 {
-        sounds.push((b.pos, feet(b)));
-    }
     // How far each carries, tile by tile.
     let carried: Vec<(Vec2, Vec<f32>)> = sounds
         .iter()
         .map(|&(at, loud)| (at, sight.carry(at, loud, doors)))
         .collect();
-    // In a thicket he is hidden, from a guard who did not see him go in,
-    // unless that guard is in it with him.
-    let den = player.hideout();
     for mut g in &mut guards {
         if g.out > 0.0 {
             continue;
         }
-        let hidden = den.is_some_and(|d| !d.contains(g.body.pos));
-        g.sees = (g.sees || !hidden)
-            && g.in_cone(b.pos) * sight.seen(b.pos, g.body.pos, reach, b.is_crouching(), doors)
-                > 0.5;
-        spotted.0 |= g.sees;
+        // In a thicket a robber is hidden, from a guard who did not see him
+        // go in, unless that guard is in it with him.
+        let visible = |&(e, p, c): &(Entity, &Player, &Controls)| {
+            let b = &p.body;
+            let reach = if c.torch || sight.lit_at(b.pos) {
+                GUARD_VIEW
+            } else {
+                DARK
+            };
+            let hidden = level
+                .hideout(b.pos)
+                .is_some_and(|d| !d.contains(g.body.pos));
+            (g.watching(e) || !hidden)
+                && g.in_cone(b.pos) * sight.seen(b.pos, g.body.pos, reach, b.is_crouching(), doors)
+                    > 0.5
+        };
+        let seen: Vec<_> = robbers.iter().filter(visible).collect();
+        let near = |p: &Player| p.body.pos.distance(g.body.pos);
+        let spot = seen
+            .iter()
+            .find(|r| Some(r.0) == g.target)
+            .or_else(|| seen.iter().min_by(|a, b| near(a.1).total_cmp(&near(b.1))))
+            .map(|r| r.0);
+        g.sees = spot.is_some();
+        g.target = spot.or(g.target);
         g.unseen = if g.sees { 0.0 } else { g.unseen + dt };
+        let chased = g
+            .target
+            .and_then(|e| robbers.get(e).ok())
+            .map(|r| &r.1.body);
         // Seen, or just out of sight: he goes for where the robber is.
-        if g.sees || (g.last_seen.is_some() && g.unseen < TRACK) {
+        if let Some(b) = chased.filter(|_| g.sees || (g.last_seen.is_some() && g.unseen < TRACK)) {
             let going = if b.speed > 1.0 { b.intent } else { b.heading };
             g.last_seen = Some((b.pos, going));
             g.path = if g.sees && g.body.pos.distance(b.pos) < CATCH {
@@ -710,8 +747,8 @@ pub fn detect(
 }
 
 fn alarm(
-    spotted: Res<Spotted>,
-    shown: Res<Shown>,
+    guards: Query<&Guard>,
+    robbers: Query<&Shown>,
     time: Res<Time>,
     mut since: Local<f32>,
     mut mark: Query<(&mut Transform, &mut Visibility), With<Alarm>>,
@@ -719,19 +756,25 @@ fn alarm(
     let Ok((mut t, mut vis)) = mark.single_mut() else {
         return;
     };
-    *since = if spotted.0 {
+    let seen = guards
+        .iter()
+        .filter(|g| g.sees)
+        .find_map(|g| robbers.get(g.target?).ok());
+    *since = if seen.is_some() {
         *since + time.delta_secs()
     } else {
         0.0
     };
-    *vis = if spotted.0 {
+    *vis = if seen.is_some() {
         Visibility::Inherited
     } else {
         Visibility::Hidden
     };
     // It pops up, a little too big at first.
     let pop = 1.0 - (-12.0 * *since).exp() * (20.0 * *since).cos();
-    t.translation = (shown.pos + vec2(0.0, 36.0)).extend(30.0);
+    if let Some(shown) = seen {
+        t.translation = (shown.pos + vec2(0.0, 36.0)).extend(30.0);
+    }
     t.scale = Vec3::splat(pop);
 }
 
@@ -760,13 +803,12 @@ fn ghost(guards: Query<&Guard>, mut ghosts: Query<(&Ghost, &mut Transform, &mut 
 pub fn knock(
     keys: Res<ButtonInput<KeyCode>>,
     script: Res<crate::dev::Script>,
-    inventory: Res<crate::inventory::Inventory>,
-    player: Res<Player>,
-    mut reach: ResMut<Reach>,
+    me: Single<(&Player, &Inventory, &mut Reach), With<LocalPlayer>>,
     mut prompt: ResMut<crate::prompt::Prompt>,
     mut guards: Query<&mut Guard>,
     mut noises: MessageWriter<Noise>,
 ) {
+    let (player, inventory, mut reach) = me.into_inner();
     let b = &player.body;
     let behind = |g: &Guard| {
         let off = b.pos - g.body.pos;

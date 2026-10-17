@@ -1,49 +1,62 @@
 use crate::dev::Script;
 use crate::guard::Guard;
+use crate::guns::Gunplay;
 use crate::inventory::{Inventory, Kind};
+use crate::map::Map;
 use crate::movement::{
     Aabb, BODY_MARGIN, Body, MARCH_SPEED, STEP, Solids, Steer, TILE, approach, wrap_angle,
 };
 use crate::paint;
-use crate::render::{Lamps, WorldMaterial, WorldMaterials, WorldPart, write_params};
+use crate::render::{
+    Lamps, WorldMaterial, WorldMaterials, WorldPart, things_material, write_params,
+};
+use bevy::ecs::query::QueryItem;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use std::f32::consts::{PI, TAU};
 
-#[derive(Resource)]
+#[derive(Component)]
 pub struct Player {
     pub body: Body,
+}
+
+#[derive(Component)]
+pub struct LocalPlayer;
+
+#[derive(Resource)]
+pub struct Level {
     pub solids: Solids,
     /// The half-height props' bodies.
     pub cover: Vec<Aabb>,
-    /// The thickets he can hide in.
     pub hideouts: Vec<Aabb>,
 }
 
-impl Player {
-    pub fn hidden(&self) -> bool {
-        self.hideout().is_some()
+impl Level {
+    pub fn new(map: &Map) -> Self {
+        let props =
+            |f: fn(&crate::map::Prop) -> Option<Aabb>| map.props.iter().filter_map(f).collect();
+        Level {
+            solids: Solids::new(map.bounds(), map.solids()),
+            cover: props(|p| p.kind.is_low().then_some(p.body)),
+            hideouts: props(|p| p.kind.is_hideout().then_some(p.block)),
+        }
     }
 
-    /// The thicket he is in.
-    pub fn hideout(&self) -> Option<Aabb> {
-        self.hideouts
-            .iter()
-            .copied()
-            .find(|h| h.contains(self.body.pos))
+    pub fn hideout(&self, at: Vec2) -> Option<Aabb> {
+        self.hideouts.iter().copied().find(|h| h.contains(at))
     }
 
-    pub fn in_cover(&self) -> bool {
-        self.body.is_crouching()
+    pub fn in_cover(&self, b: &Body) -> bool {
+        b.is_crouching()
             && self
                 .cover
                 .iter()
-                .any(|c| c.expand(BODY_MARGIN + TILE * 0.5).contains(self.body.pos))
+                .any(|c| c.expand(BODY_MARGIN + TILE * 0.5).contains(b.pos))
     }
 }
 
-#[derive(Resource, Default)]
+#[derive(Component, Default)]
 pub struct Controls {
     pub walk: Option<f32>,
     pub aim: f32,
@@ -56,13 +69,15 @@ pub struct Controls {
     pub pointer: Option<Vec2>,
 }
 
-#[derive(Resource, Default)]
+/// Drawn between fixed steps.
+#[derive(Component, Default)]
 pub struct Shown {
     pub pos: Vec2,
+    crouch: f32,
 }
 
 /// A hand put out to a door as it opens or shuts: where, and how long ago.
-#[derive(Resource, Default)]
+#[derive(Component, Default)]
 pub struct Reach(pub Option<(Vec2, f32)>);
 
 const REACH_TIME: f32 = 0.4;
@@ -103,13 +118,10 @@ pub fn gun_line(pos: Vec2, heading: f32, pointer: Vec2) -> (Vec2, Vec2) {
 }
 
 /// A swing of the crowbar, how long ago.
-#[derive(Resource, Default)]
+#[derive(Component, Default)]
 pub struct Swing(pub Option<f32>);
 
 const SWING_TIME: f32 = 0.35;
-
-#[derive(Component)]
-pub struct Robber;
 
 #[derive(Component, Clone, Copy)]
 pub enum Part {
@@ -133,149 +145,164 @@ pub struct PlayerPlugin;
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(Time::<Fixed>::from_seconds(STEP as f64))
-            .init_resource::<Controls>()
-            .init_resource::<Shown>()
-            .init_resource::<Reach>()
-            .init_resource::<Swing>()
-            .add_systems(
-                PreUpdate,
-                read_controls
-                    .after(bevy::input::InputSystems)
-                    .run_if(resource_exists::<Player>),
-            )
-            .add_systems(FixedUpdate, step.run_if(resource_exists::<Player>))
-            .add_systems(
-                Update,
-                (show, animate, follow, zoom)
-                    .chain()
-                    .run_if(resource_exists::<Player>),
-            );
+            .add_systems(FixedUpdate, step.run_if(resource_exists::<Level>));
+        if crate::drawn(app) {
+            app.add_systems(PreUpdate, read_controls.after(bevy::input::InputSystems))
+                .add_systems(Update, (show, animate, follow, zoom).chain());
+        }
     }
 }
 
-pub fn spawn_robber(
-    commands: &mut Commands,
-    meshes: &mut Assets<Mesh>,
-    material: Handle<WorldMaterial>,
-    at: Vec2,
-) {
-    let p = paint::robber();
-    let [foot, knee, arm, glove, crowbar, torch, lens, streak] = [
-        p.foot, p.knee, p.arm, p.glove, p.crowbar, p.torch, p.lens, p.streak,
-    ]
-    .map(|m| Mesh2d(meshes.add(m)));
-    let coin = Mesh2d(meshes.add(paint::coin()));
-    let pistol = Mesh2d(meshes.add(paint::pistol()));
-    let mat = MeshMaterial2d(material);
-    commands
+pub fn spawn_robber(commands: &mut Commands, at: Vec2, local: bool) -> Entity {
+    let robber = commands
         .spawn((
             WorldPart,
-            Robber,
-            Transform::from_xyz(at.x, at.y, 10.0),
-            Visibility::default(),
+            Player {
+                body: Body::new(at, std::f32::consts::FRAC_PI_2),
+            },
+            Controls::default(),
+            Inventory::default(),
+            Reach::default(),
+            Swing::default(),
+            Gunplay::default(),
         ))
-        .with_children(|r| {
-            r.spawn((
-                Mesh2d(meshes.add(p.shadow)),
-                mat.clone(),
-                Transform::from_xyz(0.0, 0.0, -0.9),
-            ));
-            for side in [-1i8, 1] {
+        .id();
+    if local {
+        commands.entity(robber).insert(LocalPlayer);
+    }
+    robber
+}
+
+/// His picture, fading unless he is the one looking.
+pub fn dress(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    world_materials: Res<WorldMaterials>,
+    robbers: Query<(Entity, &Player, Has<LocalPlayer>), Added<Player>>,
+) {
+    for (robber, player, local) in &robbers {
+        let at = player.body.pos;
+        let p = paint::robber(!local);
+        let [foot, knee, arm, glove, crowbar, torch, lens, streak] = [
+            p.foot, p.knee, p.arm, p.glove, p.crowbar, p.torch, p.lens, p.streak,
+        ]
+        .map(|m| Mesh2d(meshes.add(m)));
+        let coin = Mesh2d(meshes.add(paint::coin()));
+        let pistol = Mesh2d(meshes.add(paint::pistol()));
+        let mat = MeshMaterial2d(things_material(&world_materials));
+        commands
+            .entity(robber)
+            .insert((
+                Shown {
+                    pos: at,
+                    crouch: 0.0,
+                },
+                Transform::from_xyz(at.x, at.y, 10.0),
+                Visibility::default(),
+            ))
+            .with_children(|r| {
                 r.spawn((
-                    Part::Foot(side),
-                    foot.clone(),
+                    Mesh2d(meshes.add(p.shadow)),
                     mat.clone(),
-                    Transform::from_xyz(0.0, 8.0 * side as f32, -0.6),
+                    Transform::from_xyz(0.0, 0.0, -0.9),
+                ));
+                for side in [-1i8, 1] {
+                    r.spawn((
+                        Part::Foot(side),
+                        foot.clone(),
+                        mat.clone(),
+                        Transform::from_xyz(0.0, 8.0 * side as f32, -0.6),
+                    ));
+                    r.spawn((
+                        Part::Knee(side),
+                        knee.clone(),
+                        mat.clone(),
+                        Transform::from_xyz(0.0, 0.0, -0.3).with_scale(Vec3::ZERO),
+                    ));
+                }
+                r.spawn((
+                    Part::Torso,
+                    Mesh2d(meshes.add(p.torso)),
+                    mat.clone(),
+                    Transform::from_xyz(-1.0, 0.0, 0.0),
                 ));
                 r.spawn((
-                    Part::Knee(side),
-                    knee.clone(),
+                    Part::Bag,
+                    Mesh2d(meshes.add(p.bag)),
                     mat.clone(),
-                    Transform::from_xyz(0.0, 0.0, -0.3).with_scale(Vec3::ZERO),
+                    Transform::from_xyz(-13.0, 0.0, 0.2),
                 ));
-            }
-            r.spawn((
-                Part::Torso,
-                Mesh2d(meshes.add(p.torso)),
-                mat.clone(),
-                Transform::from_xyz(-1.0, 0.0, 0.0),
-            ));
-            r.spawn((
-                Part::Bag,
-                Mesh2d(meshes.add(p.bag)),
-                mat.clone(),
-                Transform::from_xyz(-13.0, 0.0, 0.2),
-            ));
-            for side in [-1i8, 1] {
-                r.spawn((
-                    Part::Hand(side),
-                    glove.clone(),
-                    mat.clone(),
-                    Transform::from_xyz(16.0, 14.0 * side as f32, 0.36),
-                ));
-                let hand = Transform::from_xyz(15.0, 0.0, 0.05);
-                r.spawn((
-                    Part::Arm(side),
-                    arm.clone(),
-                    mat.clone(),
-                    Transform::from_xyz(1.0, 14.0 * side as f32, 0.3),
-                ))
-                .with_children(|a| {
-                    if side < 0 {
-                        a.spawn((
-                            Part::Tool(Kind::Crowbar),
-                            crowbar.clone(),
-                            mat.clone(),
-                            hand.with_rotation(Quat::from_rotation_z(0.35)),
-                        ));
-                        a.spawn((
-                            Part::Tool(Kind::Coin),
-                            coin.clone(),
-                            mat.clone(),
-                            hand.with_translation(vec3(17.0, 0.0, 0.1)),
-                        ));
-                    } else {
-                        a.spawn((
-                            Part::Tool(Kind::Flashlight),
-                            torch.clone(),
-                            mat.clone(),
-                            hand.with_rotation(Quat::from_rotation_z(0.42)),
-                        ))
-                        .with_children(|t| {
-                            t.spawn((
-                                Part::Lens,
-                                lens.clone(),
+                for side in [-1i8, 1] {
+                    r.spawn((
+                        Part::Hand(side),
+                        glove.clone(),
+                        mat.clone(),
+                        Transform::from_xyz(16.0, 14.0 * side as f32, 0.36),
+                    ));
+                    let hand = Transform::from_xyz(15.0, 0.0, 0.05);
+                    r.spawn((
+                        Part::Arm(side),
+                        arm.clone(),
+                        mat.clone(),
+                        Transform::from_xyz(1.0, 14.0 * side as f32, 0.3),
+                    ))
+                    .with_children(|a| {
+                        if side < 0 {
+                            a.spawn((
+                                Part::Tool(Kind::Crowbar),
+                                crowbar.clone(),
                                 mat.clone(),
-                                Transform::from_xyz(0.0, 0.0, 0.01),
-                                Visibility::Hidden,
+                                hand.with_rotation(Quat::from_rotation_z(0.35)),
                             ));
-                        });
-                    }
-                });
-            }
-            r.spawn((
-                Part::Gun,
-                pistol.clone(),
-                mat.clone(),
-                Transform::from_xyz(GRIP, 0.0, 0.33),
-                Visibility::Hidden,
-            ));
-            r.spawn((
-                Part::Head,
-                Mesh2d(meshes.add(p.head)),
-                mat.clone(),
-                Transform::from_xyz(2.0, 0.0, 0.5),
-            ));
-            for k in [-1i8, 0, 1] {
+                            a.spawn((
+                                Part::Tool(Kind::Coin),
+                                coin.clone(),
+                                mat.clone(),
+                                hand.with_translation(vec3(17.0, 0.0, 0.1)),
+                            ));
+                        } else {
+                            a.spawn((
+                                Part::Tool(Kind::Flashlight),
+                                torch.clone(),
+                                mat.clone(),
+                                hand.with_rotation(Quat::from_rotation_z(0.42)),
+                            ))
+                            .with_children(|t| {
+                                t.spawn((
+                                    Part::Lens,
+                                    lens.clone(),
+                                    mat.clone(),
+                                    Transform::from_xyz(0.0, 0.0, 0.01),
+                                    Visibility::Hidden,
+                                ));
+                            });
+                        }
+                    });
+                }
                 r.spawn((
-                    Part::Streak(k),
-                    streak.clone(),
+                    Part::Gun,
+                    pistol.clone(),
                     mat.clone(),
-                    Transform::from_xyz(-24.0, 9.0 * k as f32, -0.8),
+                    Transform::from_xyz(GRIP, 0.0, 0.33),
                     Visibility::Hidden,
                 ));
-            }
-        });
+                r.spawn((
+                    Part::Head,
+                    Mesh2d(meshes.add(p.head)),
+                    mat.clone(),
+                    Transform::from_xyz(2.0, 0.0, 0.5),
+                ));
+                for k in [-1i8, 0, 1] {
+                    r.spawn((
+                        Part::Streak(k),
+                        streak.clone(),
+                        mat.clone(),
+                        Transform::from_xyz(-24.0, 9.0 * k as f32, -0.8),
+                        Visibility::Hidden,
+                    ));
+                }
+            });
+    }
 }
 
 fn read_controls(
@@ -283,10 +310,9 @@ fn read_controls(
     script: Res<Script>,
     window: Query<&Window, With<PrimaryWindow>>,
     camera: Query<(&Camera, &GlobalTransform)>,
-    shown: Res<Shown>,
-    inventory: Res<Inventory>,
-    mut controls: ResMut<Controls>,
+    me: Single<(&Shown, &Inventory, &mut Controls), With<LocalPlayer>>,
 ) {
+    let (shown, inventory, mut controls) = me.into_inner();
     let held = |k: KeyCode, name: &str| keys.pressed(k) || script.held(name);
     let mut d = Vec2::ZERO;
     if held(KeyCode::KeyW, "W") || held(KeyCode::ArrowUp, "Up") {
@@ -343,48 +369,65 @@ fn read_controls(
     }
 }
 
-fn step(mut player: ResMut<Player>, mut controls: ResMut<Controls>) {
-    let player = &mut *player;
-    player.body.set_steer(Steer {
-        walk: controls.walk,
-        aim: controls.aim,
-        sprint: controls.sprint,
-        crouch: controls.crouch,
-        thick: player.hidden(),
-    });
-    if controls.roll {
-        controls.roll = false;
-        player.body.start_roll();
+fn step(level: Res<Level>, mut players: Query<(&mut Player, &mut Controls)>) {
+    for (mut player, mut controls) in &mut players {
+        let thick = level.hideout(player.body.pos).is_some();
+        let b = &mut player.body;
+        b.set_steer(Steer {
+            walk: controls.walk,
+            aim: controls.aim,
+            sprint: controls.sprint,
+            crouch: controls.crouch,
+            thick,
+        });
+        if controls.roll {
+            controls.roll = false;
+            b.start_roll();
+        }
+        b.update(STEP, &level.solids);
     }
-    player.body.update(STEP, &player.solids);
 }
 
-fn show(player: Res<Player>, time: Res<Time<Fixed>>, mut shown: ResMut<Shown>) {
-    let b = &player.body;
-    shown.pos = if b.pos.distance(b.was) > 52.0 {
-        b.pos
-    } else {
-        b.was + (b.pos - b.was) * time.overstep_fraction()
-    };
+fn show(time: Res<Time<Fixed>>, mut players: Query<(&Player, &mut Shown)>) {
+    for (player, mut shown) in &mut players {
+        let b = &player.body;
+        shown.pos = if b.pos.distance(b.was) > 52.0 {
+            b.pos
+        } else {
+            b.was + (b.pos - b.was) * time.overstep_fraction()
+        };
+    }
 }
 
-#[allow(clippy::too_many_arguments)]
+type Robber<'a> = (
+    Entity,
+    &'a Player,
+    &'a Controls,
+    &'a Inventory,
+    &'a mut Shown,
+    &'a mut Reach,
+    &'a mut Swing,
+    &'a mut Transform,
+);
+
 fn animate(
-    player: Res<Player>,
-    controls: Res<Controls>,
-    inventory: Res<Inventory>,
-    shown: Res<Shown>,
     time: Res<Time>,
-    mut reach: ResMut<Reach>,
-    mut strike: ResMut<Swing>,
-    mut crouch: Local<f32>,
-    mut root: Query<&mut Transform, (With<Robber>, Without<Part>)>,
-    mut parts: Query<(&Part, &mut Transform, &mut Visibility), Without<Robber>>,
+    mut robbers: Query<Robber, Without<Part>>,
+    children: Query<&Children>,
+    mut parts: Query<(&Part, &mut Transform, &mut Visibility), Without<Player>>,
+) {
+    for robber in &mut robbers {
+        pose(&time, robber, &children, &mut parts);
+    }
+}
+
+fn pose(
+    time: &Time,
+    (root, player, controls, inventory, mut shown, mut reach, mut strike, mut t): QueryItem<Robber>,
+    children: &Query<&Children>,
+    parts: &mut Query<(&Part, &mut Transform, &mut Visibility), Without<Player>>,
 ) {
     let b = &player.body;
-    let Ok(mut t) = root.single_mut() else {
-        return;
-    };
     let rolling = b.roll_share();
     reach.0 = reach.0.map(|(at, age)| (at, age + time.delta_secs()));
     reach.0 = reach
@@ -402,10 +445,10 @@ fn animate(
     t.translation = shown.pos.extend(10.0);
     t.rotation = Quat::from_rotation_z(b.heading);
     let down = if b.is_crouching() { 1.0 } else { 0.0 };
-    *crouch += (down - *crouch) * approach(14.0, time.delta_secs());
+    shown.crouch += (down - shown.crouch) * approach(14.0, time.delta_secs());
     // A roll tucks into the crouch pose, quickly, and back out at the end.
     let tuck = rolling.map_or(0.0, |s| ((PI * s).sin() * 2.0).min(1.0));
-    let c = crouch.max(tuck);
+    let c = shown.crouch.max(tuck);
     // Crouched from above: folded forward, knees out in front, a kneeling stance.
     let m = |stand: f32, low: f32| stand + (low - stand) * c;
     t.scale = Vec3::splat(m(1.0, 0.92) * (1.0 - 0.12 * tuck));
@@ -437,7 +480,8 @@ fn animate(
     let s = b.stride.sin();
     let reach = if sprint { 15.0 } else { 9.5 };
     let clock = time.elapsed_secs();
-    for (part, mut pt, mut vis) in &mut parts {
+    let mut own = parts.iter_many_mut(children.iter_descendants(root));
+    while let Some((part, mut pt, mut vis)) = own.fetch_next() {
         match *part {
             Part::Foot(side) => {
                 let sd = side as f32;
@@ -579,16 +623,28 @@ fn animate(
 
 #[allow(clippy::too_many_arguments)]
 fn follow(
-    shown: Res<Shown>,
-    player: Res<Player>,
-    controls: Res<Controls>,
+    me: Single<(Entity, &Shown, &Player, &Controls), With<LocalPlayer>>,
+    robbers: Query<(Entity, &Shown, &Player, &Controls)>,
     guards: Query<&Guard>,
     time: Res<Time<Fixed>>,
-    mut camera: Query<&mut Transform, (With<Camera2d>, Without<Robber>)>,
+    mut camera: Query<&mut Transform, (With<Camera2d>, Without<Player>)>,
     world_materials: Res<WorldMaterials>,
     lamps: Res<Lamps>,
     mut materials: ResMut<Assets<WorldMaterial>>,
 ) {
+    let (me, shown, player, controls) = *me;
+    // His own first, then the nearest, as many as the shader takes.
+    let mut lit: Vec<_> = robbers.iter().filter(|r| r.3.torch).collect();
+    let far = |r: &(Entity, &Shown, _, _)| (r.0 != me, r.1.pos.distance_squared(shown.pos));
+    lit.sort_by(|a, b| far(a).partial_cmp(&far(b)).unwrap());
+    let torches: Vec<_> = lit
+        .iter()
+        .map(|(_, s, p, _)| {
+            s.pos
+                .extend(p.body.heading.cos())
+                .extend(p.body.heading.sin())
+        })
+        .collect();
     if let Ok(mut c) = camera.single_mut() {
         c.translation.x = shown.pos.x;
         c.translation.y = shown.pos.y;
@@ -602,6 +658,7 @@ fn follow(
             .iter()
             .next()
             .map_or(Vec4::ZERO, |g| g.view(time.overstep_fraction())),
+        &torches,
         &world_materials,
         &lamps,
         &mut materials,

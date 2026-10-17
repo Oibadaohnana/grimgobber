@@ -8,7 +8,7 @@ use crate::guard::Guard;
 use crate::inventory::{Inventory, Kind};
 use crate::movement::{Solids, TILE};
 use crate::paint;
-use crate::player::{Player, Shown, Swing};
+use crate::player::{Level, LocalPlayer, Player, Shown, Swing};
 use crate::render::{WorldMaterials, WorldPart, things_material};
 use crate::sound::{Clip, Noise};
 use bevy::prelude::*;
@@ -55,7 +55,7 @@ impl Plugin for ThrowPlugin {
             Update,
             (aim, throw, fly, pick_up, collect.after(crate::guard::knock))
                 .chain()
-                .run_if(resource_exists::<Player>),
+                .run_if(resource_exists::<Level>),
         );
     }
 }
@@ -94,22 +94,17 @@ fn pointer(
 
 /// Coins in hand, the ring round him and the spot under the pointer.
 fn aim(
-    inventory: Res<Inventory>,
-    player: Res<Player>,
-    shown: Res<Shown>,
+    me: Single<(&Inventory, &Player, &Shown), With<LocalPlayer>>,
+    level: Res<Level>,
     window: Query<&Window, With<PrimaryWindow>>,
     camera: Query<(&Camera, &GlobalTransform)>,
     mut marks: Query<(&Aim, &mut Transform, &mut Visibility)>,
 ) {
+    let (inventory, player, shown) = *me;
     let on = !inventory.open && inventory.holds(Kind::Coin);
     let b = &player.body;
-    let spot = pointer(&window, &camera).map(|p| {
-        landing(
-            b.pos + Vec2::from_angle(b.heading) * 16.0,
-            p,
-            &player.solids,
-        )
-    });
+    let spot = pointer(&window, &camera)
+        .map(|p| landing(b.pos + Vec2::from_angle(b.heading) * 16.0, p, &level.solids));
     for (aim, mut t, mut vis) in &mut marks {
         let at = match aim {
             Aim::Reach => Some(shown.pos),
@@ -147,13 +142,13 @@ fn throw(
     script: Res<Script>,
     window: Query<&Window, With<PrimaryWindow>>,
     camera: Query<(&Camera, &GlobalTransform)>,
-    player: Res<Player>,
+    me: Single<(&Player, &mut Inventory, &mut Swing), With<LocalPlayer>>,
+    level: Res<Level>,
     coin: Res<CoinMesh>,
     world_materials: Res<WorldMaterials>,
-    mut inventory: ResMut<Inventory>,
-    mut strike: ResMut<Swing>,
     mut commands: Commands,
 ) {
+    let (player, mut inventory, mut strike) = me.into_inner();
     let click = mouse.just_pressed(MouseButton::Left) || script.pressed("Throw");
     let Some(held) = inventory.held() else {
         return;
@@ -169,7 +164,7 @@ fn throw(
         _ => b.pos + ahead * THROW * TILE,
     };
     let from = b.pos + ahead * 16.0;
-    let to = landing(from, aim, &player.solids);
+    let to = landing(from, aim, &level.solids);
     strike.0 = Some(0.0);
     commands.spawn((
         WorldPart,
@@ -231,12 +226,12 @@ fn pick_up(
 fn collect(
     keys: Res<ButtonInput<KeyCode>>,
     script: Res<Script>,
-    player: Res<Player>,
+    me: Single<(&Player, &mut Inventory), With<LocalPlayer>>,
     coins: Query<(Entity, &Transform), With<Dropped>>,
-    mut inventory: ResMut<Inventory>,
     mut prompt: ResMut<crate::prompt::Prompt>,
     mut commands: Commands,
 ) {
+    let (player, mut inventory) = me.into_inner();
     if prompt.0.is_some() || inventory.open {
         return;
     }

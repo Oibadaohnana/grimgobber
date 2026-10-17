@@ -2,10 +2,10 @@
 //! with distance, and quieter still (`WALL`) where the robber cannot see.
 //! Doors are one-shots; footsteps a loop on each walker, at the pace he goes.
 
+use crate::doors::Shut;
 use crate::guard::Guard;
 use crate::movement::{MARCH_SPEED, TILE};
-use crate::player::{Controls, Player, Robber};
-use crate::render::WorldMaterials;
+use crate::player::{Controls, LocalPlayer, Player};
 use crate::sight::Sight;
 use bevy::audio::{
     AudioPlayer, AudioSink, AudioSinkPlayback, AudioSource, PlaybackSettings, Volume,
@@ -81,7 +81,7 @@ impl Plugin for SoundPlugin {
         app.add_systems(Startup, load).add_systems(
             Update,
             (feet, noises, steps)
-                .run_if(resource_exists::<Player>.and_then(resource_exists::<Sight>)),
+                .run_if(resource_exists::<Shut>.and_then(resource_exists::<Sight>)),
         );
     }
 }
@@ -108,29 +108,24 @@ fn load(mut assets: ResMut<Assets<AudioSource>>, mut commands: Commands) {
 
 /// What the robber hears by: where he is, and what he can see.
 #[derive(bevy::ecs::system::SystemParam)]
-struct Ear<'w> {
-    player: Res<'w, Player>,
+struct Ear<'w, 's> {
+    me: Single<'w, 's, (&'static Player, &'static Controls), With<LocalPlayer>>,
     sight: Res<'w, Sight>,
-    controls: Res<'w, Controls>,
-    world_materials: Res<'w, WorldMaterials>,
-    images: Res<'w, Assets<Image>>,
+    shut: Res<'w, Shut>,
 }
 
-impl Ear<'_> {
+impl Ear<'_, '_> {
     /// How loud a sound carrying `range` tiles is from `at`, as `place` in audio.js.
     fn heard(&self, at: Vec2, range: f32) -> f32 {
-        let b = &self.player.body;
+        let (player, controls) = *self.me;
+        let b = &player.body;
         let near = (1.0 - b.pos.distance(at) / (range * TILE))
             .max(0.0)
             .powf(1.5);
-        let doors = self
-            .images
-            .get(&self.world_materials.doors)
-            .and_then(|i| i.data.as_deref())
-            .unwrap_or(&[]);
+        let doors = &self.shut.0;
         let reach = self
             .sight
-            .robber_reach(b.pos, b.heading, self.controls.torch, at);
+            .robber_reach(b.pos, b.heading, controls.torch, at);
         let seen = self.sight.seen(b.pos, at, reach, b.is_crouching(), doors) > 0.1;
         near * if seen { 1.0 } else { WALL }
     }
@@ -140,7 +135,7 @@ impl Ear<'_> {
 fn feet(
     clips: Res<Clips>,
     mut commands: Commands,
-    robbers: Query<Entity, Added<Robber>>,
+    robbers: Query<Entity, Added<Player>>,
     guards: Query<Entity, Added<Guard>>,
 ) {
     for e in robbers.iter().chain(&guards) {
@@ -180,27 +175,25 @@ fn noises(clips: Res<Clips>, ear: Ear, mut noises: MessageReader<Noise>, mut com
 
 fn steps(
     ear: Ear,
-    mut robber: Query<&mut AudioSink, (With<Robber>, Without<Guard>)>,
+    mut robbers: Query<(&Player, Has<LocalPlayer>, &mut AudioSink), Without<Guard>>,
     mut guards: Query<(&Guard, &mut AudioSink)>,
 ) {
-    // His own feet at a whisper crouched; a guard's by where he is.
+    // His own feet at a whisper crouched; anyone else's by where they are.
     let pace = |speed: f32| (speed / MARCH_SPEED).clamp(0.0, 1.8);
-    let b = &ear.player.body;
-    if let Ok(mut sink) = robber.single_mut() {
+    let walkers = robbers
+        .iter_mut()
+        .map(|(p, me, sink)| (&p.body, me, sink))
+        .chain(guards.iter_mut().map(|(g, sink)| (&g.body, false, sink)));
+    for (b, me, mut sink) in walkers {
         let walking = !b.is_rolling() && b.speed > 1.0;
         let soft = if b.is_crouching() { 0.4 } else { 1.0 };
-        let level = if walking { MASTER * 0.275 * soft } else { 0.0 };
-        sink.set_volume(Volume::Linear(level));
-        sink.set_speed(pace(b.speed).clamp(0.7, 1.4));
-    }
-    for (g, mut sink) in &mut guards {
-        let level = if g.body.speed > 1.0 {
-            MASTER * 0.275 * ear.heard(g.body.pos, 9.0)
-        } else {
-            0.0
+        let level = match (walking, me) {
+            (false, _) => 0.0,
+            (true, true) => MASTER * 0.275 * soft,
+            (true, false) => MASTER * 0.275 * ear.heard(b.pos, 9.0),
         };
         sink.set_volume(Volume::Linear(level));
-        sink.set_speed(pace(g.body.speed).clamp(0.7, 1.4));
+        sink.set_speed(pace(b.speed).clamp(0.7, 1.4));
     }
 }
 

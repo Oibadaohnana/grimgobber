@@ -6,9 +6,10 @@
 
 struct Params {
     eye: vec4<f32>, // the robber xy, the way he faces (cos, sin)
-    map: vec4<f32>, // the map's size in tiles xy, a tile in world units z
+    map: vec4<f32>, // the map's size in tiles xy, a tile in world units z, torch count w
     misc: vec4<f32>, // mode, lamp count, flashlight on (1/0), crouched (1/0)
     guard: vec4<f32>, // the guard xy, the way he faces (cos, sin); zero for none
+    torches: array<vec4<f32>, 6>, // every flashlight on, as `eye`
     lights: array<vec4<f32>, 256>, // two a lamp: (x, y, reach, power), (r, g, b, 0)
 };
 
@@ -242,19 +243,28 @@ fn light_at(w: vec2<f32>, dst: Spot) -> vec3<f32> {
     return light;
 }
 
-// How far inside the flashlight's cone a point is, 0 to 1 (0 with it off).
+// How far inside a flashlight's cone a point is, 0 to 1.
+fn cone_of(t: vec4<f32>, w: vec2<f32>) -> f32 {
+    let off = w - (t.xy + t.zw * LENS_AHEAD);
+    return smoothstep(cos(CONE_OUT), cos(CONE_IN), dot(off, t.zw) / max(length(off), 1e-3));
+}
+
+// The robber's own, 0 with it off.
 fn beam(w: vec2<f32>) -> f32 {
-    let off = w - (P.eye.xy + P.eye.zw * LENS_AHEAD);
-    let inside = smoothstep(cos(CONE_OUT), cos(CONE_IN), dot(off, P.eye.zw) / max(length(off), 1e-3));
-    return select(0.0, inside, P.misc.z > 0.5);
+    return select(0.0, cone_of(P.eye, w), P.misc.z > 0.5);
 }
 
 fn torch_at(w: vec2<f32>, dst: Spot) -> vec3<f32> {
-    if P.misc.z < 0.5 {
-        return vec3<f32>(0.0);
+    var light = vec3<f32>(0.0);
+    for (var i = 0; i < i32(P.map.w); i++) {
+        light += one_torch(P.torches[i], w, dst);
     }
-    let ahead = P.eye.zw;
-    let lens = P.eye.xy + ahead * LENS_AHEAD;
+    return light;
+}
+
+fn one_torch(t: vec4<f32>, w: vec2<f32>, dst: Spot) -> vec3<f32> {
+    let ahead = t.zw;
+    let lens = t.xy + ahead * LENS_AHEAD;
     let off = w - lens;
     let d = length(off);
     let reach = TORCH_REACH * P.map.z;
@@ -263,8 +273,8 @@ fn torch_at(w: vec2<f32>, dst: Spot) -> vec3<f32> {
     }
     let x = d / reach;
     let fall = (1.0 - x * x) * (1.0 - x * x) / (1.0 + 4.0 * x * x);
-    let cone = beam(w);
-    let spill = 0.22 * (1.0 - smoothstep(0.4 * P.map.z, 2.2 * P.map.z, distance(w, P.eye.xy)));
+    let cone = cone_of(t, w);
+    let spill = 0.22 * (1.0 - smoothstep(0.4 * P.map.z, 2.2 * P.map.z, distance(w, t.xy)));
     let power = TORCH_POWER * cone * fall + spill;
     if power < 0.002 {
         return vec3<f32>(0.0);

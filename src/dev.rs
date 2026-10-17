@@ -5,14 +5,18 @@
 //! - `BB_SCREENSHOT=path.png`: save the frame 30 before the end
 //! - `BB_KEYS="10:+W,40:-W,45:Roll"`: hold (+) or let go (-) of W A S D Shift
 //!   Up Down Left Right at those frames, or press `Roll`, `Torch`, `Crouch`,
-//!   `Inventory`, `Slot1`–`Slot4` or `Smash`, `Throw` or `Fire` (a left click), `Use` (E) or `Reload` once
+//!   `Inventory`, `Slot1`–`Slot4` or `Smash`, `Throw` or `Fire` (a left click), `Use` (E), `Reload` or `NewBank` (F5) once
 //! - `BB_AIM=degrees`: aim there instead of at the pointer (0 east, 90 north)
 //! - `BB_ZOOM=scale`: world units a pixel (0.7)
 //! - `BB_WINDOW=1400x900`: the window's size
 //! - `BB_SPAWN=x,y`: start on that tile
 //! - `BB_GUARD=x,y`: the guard starts on that tile (else in the security room)
 //! - `BB_UNPACED=1`: smoke frames as fast as they go, logging the average fps
+//! - `BB_PLAYERS=n`: n-1 more robbers by the spawn, flashlights on, walking in slow circles
 
+use crate::map::{Map, tile_centre};
+use crate::movement::TILE;
+use crate::player::Controls;
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use std::collections::HashSet;
@@ -27,6 +31,34 @@ pub fn tile(name: &str) -> Option<Vec2> {
     let v = env(name)?;
     let (x, y) = v.split_once(',')?;
     Some(crate::map::tile_centre(x.parse().ok()?, y.parse().ok()?))
+}
+
+/// Where the `BB_PLAYERS` crew start: free tiles 2 or more from the spawn, nearest first.
+pub fn crew(map: &Map, spawn: Vec2) -> Vec<Vec2> {
+    let n = env("BB_PLAYERS")
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(1);
+    let free = map.free();
+    let mut tiles: Vec<Vec2> = (0..map.h)
+        .flat_map(|y| (0..map.w).map(move |x| (x, y)))
+        .filter(|&(x, y)| free[map.idx(x, y)])
+        .map(|(x, y)| tile_centre(x, y))
+        .filter(|p| p.distance(spawn) >= 2.0 * TILE)
+        .collect();
+    tiles.sort_by(|a, b| a.distance(spawn).total_cmp(&b.distance(spawn)));
+    tiles.truncate(n.saturating_sub(1));
+    tiles
+}
+
+#[derive(Component)]
+pub struct Bot(pub f32);
+
+fn bots(time: Res<Time>, mut bots: Query<(&Bot, &mut Controls)>) {
+    for (bot, mut c) in &mut bots {
+        c.aim = bot.0 + time.elapsed_secs() * 0.5;
+        c.walk = Some(c.aim + 1.2);
+        c.torch = true;
+    }
 }
 
 pub fn smoke_frames() -> Option<u32> {
@@ -87,6 +119,7 @@ impl Plugin for DevPlugin {
         app.insert_resource(Script::from_env())
             .init_resource::<Frames>()
             .add_systems(First, (count, play_script).chain())
+            .add_systems(PreUpdate, bots)
             .add_systems(Last, smoke);
         if smoke_frames().is_some() {
             app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(

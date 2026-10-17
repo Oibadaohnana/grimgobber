@@ -6,12 +6,12 @@
 //! things and shut doors, or at the first body it reaches, and is heard
 //! `LOUD` tiles off.
 
+use crate::doors::Shut;
 use crate::guard::Guard;
 use crate::inventory::{Inventory, Kind};
 use crate::movement::TILE;
 use crate::paint::{self, hex};
-use crate::player::{Controls, Player, gun_line};
-use crate::render::WorldMaterials;
+use crate::player::{Controls, Level, LocalPlayer, Player, gun_line};
 use crate::rng::Rng;
 use crate::sight::Sight;
 use crate::sound::{Clip, Noise};
@@ -32,7 +32,7 @@ const GUARD_SPREAD: f32 = 0.12;
 const HEALTH: u32 = 3;
 
 /// The robber's health and his pistol's state.
-#[derive(Resource)]
+#[derive(Component)]
 pub struct Gunplay {
     pub health: u32,
     /// Seconds of a reload left (0: none), till the next shot, since the last.
@@ -79,20 +79,18 @@ pub struct GunsPlugin;
 
 impl Plugin for GunsPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Gunplay>()
-            .add_systems(Startup, spawn)
-            .add_systems(
-                Update,
-                (
-                    holster,
-                    trigger,
-                    guard_guns.after(crate::guard::detect),
-                    fade,
-                    reticle,
-                )
-                    .chain()
-                    .run_if(resource_exists::<Player>.and_then(resource_exists::<Sight>)),
-            );
+        app.add_systems(Startup, spawn).add_systems(
+            Update,
+            (
+                holster,
+                trigger,
+                guard_guns.after(crate::guard::detect),
+                fade,
+                reticle,
+            )
+                .chain()
+                .run_if(resource_exists::<Level>.and_then(resource_exists::<Sight>)),
+        );
     }
 }
 
@@ -171,12 +169,11 @@ fn streak(commands: &mut Commands, looks: &Looks, from: Vec2, to: Vec2) {
 
 /// Out and away again: the pistol's sounds, a reload cut short.
 fn holster(
-    inventory: Res<Inventory>,
-    player: Res<Player>,
-    mut gun: ResMut<Gunplay>,
+    me: Single<(&Player, &Inventory, &mut Gunplay), With<LocalPlayer>>,
     mut was: Local<bool>,
     mut noises: MessageWriter<Noise>,
 ) {
+    let (player, inventory, mut gun) = me.into_inner();
     let held = inventory.holds(Kind::Pistol);
     if held != *was {
         let clip = if held { Clip::Unholster } else { Clip::Holster };
@@ -197,18 +194,15 @@ fn trigger(
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     script: Res<crate::dev::Script>,
-    controls: Res<Controls>,
-    player: Res<Player>,
+    me: Single<(&Controls, &Player, &mut Inventory, &mut Gunplay), With<LocalPlayer>>,
     sight: Res<Sight>,
     looks: Res<Looks>,
-    world_materials: Res<WorldMaterials>,
-    images: Res<Assets<Image>>,
-    mut inventory: ResMut<Inventory>,
-    mut gun: ResMut<Gunplay>,
+    shut: Res<Shut>,
     mut guards: Query<&mut Guard>,
     mut noises: MessageWriter<Noise>,
     mut commands: Commands,
 ) {
+    let (controls, player, mut inventory, mut gun) = me.into_inner();
     let dt = time.delta_secs();
     gun.cool -= dt;
     gun.since += dt;
@@ -260,10 +254,7 @@ fn trigger(
         .filter(|_| !script.pressed("Fire"))
         .unwrap_or(b.pos + Vec2::from_angle(b.heading) * TILE * 4.0);
     let (from, dir) = gun_line(b.pos, b.heading, pointer);
-    let doors = images
-        .get(&world_materials.doors)
-        .and_then(|i| i.data.as_deref())
-        .unwrap_or(&[]);
+    let doors = &shut.0;
     let bodies: Vec<Vec2> = guards
         .iter()
         .map(|g| {
@@ -295,27 +286,22 @@ fn trigger(
 #[allow(clippy::too_many_arguments)]
 fn guard_guns(
     time: Res<Time>,
-    inventory: Res<Inventory>,
-    player: Res<Player>,
+    mut robbers: Query<(Entity, &Player, &Inventory, &mut Gunplay)>,
     sight: Res<Sight>,
     looks: Res<Looks>,
-    world_materials: Res<WorldMaterials>,
-    images: Res<Assets<Image>>,
-    mut gun: ResMut<Gunplay>,
+    shut: Res<Shut>,
     mut guards: Query<&mut Guard>,
     mut noises: MessageWriter<Noise>,
     mut commands: Commands,
 ) {
     let dt = time.delta_secs();
-    let armed = inventory.holds(Kind::Pistol) || gun.since < ARMED_FOR;
-    let doors = images
-        .get(&world_materials.doors)
-        .and_then(|i| i.data.as_deref())
-        .unwrap_or(&[]);
-    let target = player.body.pos;
+    let doors = &shut.0;
     for mut g in &mut guards {
         g.cool -= dt;
-        if !(g.awake() && g.sees && armed) {
+        let armed = robbers.iter_mut().find(|(e, _, inv, gun)| {
+            g.watching(*e) && (inv.holds(Kind::Pistol) || gun.since < ARMED_FOR)
+        });
+        let Some((_, player, _, mut gun)) = armed.filter(|_| g.awake()) else {
             if g.gun > 0.0 && g.awake() {
                 noises.write(Noise {
                     clip: Some(Clip::Holster),
@@ -325,7 +311,7 @@ fn guard_guns(
             }
             g.gun = 0.0;
             continue;
-        }
+        };
         if g.gun == 0.0 {
             noises.write(Noise {
                 clip: Some(Clip::Unholster),
@@ -337,6 +323,7 @@ fn guard_guns(
         if g.gun < GUARD_DRAW || g.cool > 0.0 {
             continue;
         }
+        let target = player.body.pos;
         let from = g.muzzle();
         let off = (gun.rng.f32() * 2.0 - 1.0) * GUARD_SPREAD;
         let dir = Vec2::from_angle(off).rotate((target - from).normalize_or_zero());
@@ -357,7 +344,7 @@ fn guard_guns(
 
 fn fade(
     time: Res<Time>,
-    mut gun: ResMut<Gunplay>,
+    mut gun: Single<&mut Gunplay, With<LocalPlayer>>,
     mut fading: Query<(Entity, &mut Fade)>,
     mut hurt: Query<&mut BackgroundColor, With<Hurt>>,
     mut commands: Commands,
@@ -377,11 +364,10 @@ fn fade(
 
 /// On the pointer while the pistol is in hand: light within its reach, grey past it.
 fn reticle(
-    inventory: Res<Inventory>,
-    controls: Res<Controls>,
-    player: Res<Player>,
+    me: Single<(&Inventory, &Controls, &Player), With<LocalPlayer>>,
     mut marks: Query<(&Reticle, &mut Transform, &mut Visibility)>,
 ) {
+    let (inventory, controls, player) = *me;
     let on = !inventory.open && inventory.holds(Kind::Pistol);
     let b = &player.body;
     for (mark, mut t, mut vis) in &mut marks {

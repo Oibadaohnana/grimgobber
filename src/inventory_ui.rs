@@ -8,7 +8,7 @@ use crate::dev::Script;
 use crate::guard::Guard;
 use crate::inventory::{At, GRID, Inventory, Item, Kind, size_of};
 use crate::paint::{self, Frame, Hex, Painter, hex};
-use crate::player::Player;
+use crate::player::{LocalPlayer, Player};
 use bevy::input::InputSystems;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -39,8 +39,7 @@ pub struct InventoryUiPlugin;
 
 impl Plugin for InventoryUiPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Inventory>()
-            .init_resource::<Drag>()
+        app.init_resource::<Drag>()
             .add_systems(PostStartup, spawn)
             .add_systems(PreUpdate, input.after(InputSystems))
             .add_systems(Update, draw);
@@ -105,11 +104,7 @@ fn near_rects(lay: &Layout, pockets: &[(Kind, u32)]) -> Vec<Rect> {
 }
 
 /// The guard knocked out close enough to go through his pockets.
-fn near_guard<'a>(
-    player: Option<&Player>,
-    guards: impl Iterator<Item = (Entity, &'a Guard)>,
-) -> Option<Entity> {
-    let pos = player?.body.pos;
+fn near_guard<'a>(pos: Vec2, guards: impl Iterator<Item = (Entity, &'a Guard)>) -> Option<Entity> {
     guards
         .filter(|(_, g)| !g.awake() && g.body.pos.distance(pos) < NEAR)
         .map(|(e, _)| e)
@@ -166,9 +161,12 @@ fn spawn(
     let Ok(camera) = camera.single() else {
         return;
     };
+    // Bevy's mesh allocator errors on an empty mesh, and `draw` waits for a robber.
+    let mut speck = Painter::default();
+    speck.rect(Vec2::ZERO, Vec2::ONE, 0.0, hex(0).alpha(0.0));
     commands.entity(camera).with_child((
         Screen,
-        Mesh2d(meshes.add(Painter::default().build())),
+        Mesh2d(meshes.add(speck.build())),
         MeshMaterial2d(materials.add(ColorMaterial::default())),
         Transform::from_xyz(0.0, 0.0, 500.0),
         // Rebuilt every frame: its bounds from the first would be stale.
@@ -191,11 +189,11 @@ fn input(
     mouse: Res<ButtonInput<MouseButton>>,
     script: Res<Script>,
     window: Query<&Window, With<PrimaryWindow>>,
-    player: Option<Res<Player>>,
+    me: Single<(&Player, &mut Inventory), With<LocalPlayer>>,
     mut guards: Query<(Entity, &mut Guard)>,
-    mut inv: ResMut<Inventory>,
     mut drag: ResMut<Drag>,
 ) {
+    let (player, mut inv) = me.into_inner();
     if keys.just_pressed(KeyCode::Tab) || script.pressed("Inventory") {
         inv.open = !inv.open;
     }
@@ -224,7 +222,7 @@ fn input(
         return;
     };
     let lay = layout(vec2(window.width(), window.height()));
-    let near = near_guard(player.as_deref(), guards.iter());
+    let near = near_guard(player.body.pos, guards.iter());
     let mut pockets = near.and_then(|e| guards.get_mut(e).ok()).map(|(_, g)| g);
     let in_pockets = |pockets: &Option<Mut<Guard>>| {
         let pockets = pockets.as_ref().map_or(&[][..], |g| &g.pockets[..]);
@@ -351,9 +349,8 @@ fn picture(g: &mut Painter, kind: Kind, turned: bool, r: Rect) {
 #[allow(clippy::too_many_arguments)]
 fn draw(
     mut commands: Commands,
-    inv: Res<Inventory>,
+    me: Single<(&Player, &Inventory), With<LocalPlayer>>,
     drag: Res<Drag>,
-    player: Option<Res<Player>>,
     guards: Query<(Entity, &Guard)>,
     window: Query<&Window, With<PrimaryWindow>>,
     projection: Query<&Projection, With<Camera2d>>,
@@ -369,13 +366,15 @@ fn draw(
     if let Ok(Projection::Orthographic(o)) = projection.single() {
         t.scale = Vec3::splat(o.scale);
     }
+    let (player, inv) = *me;
     let win = vec2(window.width(), window.height());
     let lay = layout(win);
     let p = pointer(window);
-    let pockets: &[(Kind, u32)] = near_guard(player.as_deref(), guards.iter())
+    let guard = near_guard(player.body.pos, guards.iter());
+    let pockets: &[(Kind, u32)] = guard
         .and_then(|e| guards.get(e).ok())
         .map_or(&[], |(_, g)| &g.pockets);
-    let near = near_guard(player.as_deref(), guards.iter()).is_some();
+    let near = guard.is_some();
     // What is being dragged: one of his, or from the pockets.
     let dragged = drag.id.and_then(|id| {
         if drag.near {

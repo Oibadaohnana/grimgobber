@@ -43,7 +43,7 @@ game is. This file covers how to work on it.
 | `src/render.rs` | `WorldMaterial`, the three grid textures, spawning a map, writing the robber, the flashlight and the lamps each frame |
 | `src/shaders/world.wgsl` | the per-pixel ray tracing (lamp and flashlight shadows), the procedural floors and walls |
 | `src/player.rs` | input → `Controls` (PreUpdate), the body's fixed step (FixedUpdate), the picture blended between steps, camera, zoom |
-| `src/doors.rs` | door leaves (`Map::doors`): pushed open within reach (and `Reach` for his arm), the glass entrance by sensor; write how shut each is into the doors texture |
+| `src/doors.rs` | door leaves (`Map::doors`): pushed open within reach (and `Reach` for his arm), the glass entrance by sensor; how shut each is in `Shut`, uploaded to the doors texture |
 | `src/guard.rs` | the guard: T then a click gives him a path over `Map::free` tiles, his fixed step along it, his picture; seeing the robber (`detect`) he chases, losing him he runs to `last_seen`, marked by the robber's ghost; hearing a `Noise` or the robber's feet (`Sight::carry` reaching his tile) he goes to look, marked by a "?"; the "!"; E from behind knocks him out (`out`, `fall`: lying, blind and deaf, a "Zz") |
 | `src/hearing.rs` | how far the robber's feet carry (`feet`), and the ring showing how far a smash reaches: `Sight::carry` per tile into the `heard` texture (tiles of reach left), which the shader draws a faint ring from where it runs out |
 | `src/sight.rs` | the shader's `seen` on the CPU over the same grids and the doors texture's bytes, for the guard |
@@ -130,15 +130,38 @@ game is. This file covers how to work on it.
   `Part::Tool`, shown while held.
 - **Thickets are hideouts** (`PropKind::is_hideout`): not solid, so he walks
   in, but placed like a solid prop and their tiles kept clear. In one
-  (`Player::hideout`) a guard only goes on seeing him if he already did, or
+  (`Level::hideout`) a guard only goes on seeing him if he already did, or
   if he is in the same thicket.
+- **A robber is an entity**: `Player` (his body) with `Controls`,
+  `Inventory`, `Shown`, `Reach`, `Swing` and `Gunplay` beside it, so there
+  can be several. `LocalPlayer` marks the one this machine plays; input,
+  the camera, the shader's eye, the HUD and the ear read only him (a
+  `Single`, which skips the system until he exists). Simulation (steps,
+  doors, the guard's sight and hearing) runs over every robber. A guard's
+  `target` is the robber he is after. The others are painted fading
+  (`paint::robber(fades)`). `BB_PLAYERS=n` adds a test crew (`dev::Bot`).
+- **Every lit flashlight lights the world** (`Params::torches`, up to
+  `MAX_TORCHES` = 6, the robber's own first, count in `map.w`), each with
+  its own shadows. Only his own (`eye`, `misc.z`, `beam`) stretches his
+  sight. Six at once cost about 12% at 2560×1440.
+- **Simulation and drawing are split** so `grimgobber --server` runs
+  headless (`MinimalPlugins`, 60 Hz, no window or GPU). A plugin adds its
+  drawing systems only `if crate::drawn(app)`. `build_map` spawns data only
+  (robbers, the guard, door leaves, `Shut`, `Level`, `Sight`); the client's
+  `draw_map` and the `dress` systems (`player`, `guard`, `doors`) add
+  meshes, `Transform` and marks when they appear (`Added<..>`), which is
+  also how replicated entities will arrive. Guns, coins, smashing, the
+  knockout and the guard's T order are client-only for now.
+- **Doors' state is `doors::Shut`** (the doors texture's bytes, a resource
+  the server has too); sight and hearing read it, and the client uploads it
+  to the texture when it changes.
 - **Everything spawned for a map carries `WorldPart`.** F5 despawns all of
   them and builds the next map.
 - **The doors and tiles textures are rewritten at run time** (doors swing,
   windows get smashed), so they keep their data in the main world
   (`RenderAssetUsages::default()`); the others are render-world only and
   have no data to write. A smash also rebuilds what came from the map: the
-  robber's `Solids`, the guard's `Walkable` and `Sight`, from `smash::Bank`,
+  `Level` (solids, cover, thickets), the guard's `Walkable` and `Sight`, from `smash::Bank`,
   the map kept as it now stands. A shut door is a thin slab
   across its doorway in `trace`, opaque (glass for the entrance) times how
   shut it is. Doors never block movement: they open before he gets there.

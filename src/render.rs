@@ -1,4 +1,5 @@
-use crate::map::{DoorKind, Map};
+use crate::doors::Shut;
+use crate::map::Map;
 use crate::movement::TILE;
 use crate::paint;
 use bevy::asset::{RenderAssetUsages, load_internal_asset, uuid_handle};
@@ -16,6 +17,8 @@ const WORLD_SHADER: Handle<Shader> = uuid_handle!("3f6c1b2e-8d4a-4e7b-9a51-2c7d0
 
 /// The most lamps a frame lights: the nearest to the player.
 pub const MAX_LIGHTS: usize = 128;
+/// As in world.wgsl.
+pub const MAX_TORCHES: usize = 6;
 
 pub struct RenderPlugin;
 
@@ -32,6 +35,7 @@ pub struct Params {
     pub map: Vec4,
     pub misc: Vec4,
     pub guard: Vec4,
+    pub torches: [Vec4; MAX_TORCHES],
     pub lights: [Vec4; 2 * MAX_LIGHTS],
 }
 
@@ -137,17 +141,11 @@ pub fn spawn_map(
     let (tall, half) = (map.occluders(false), map.occluders(true));
     let occ = images.add(grid_image(map, |x, y| tall.boxes[map.idx(x, y)]));
     let low = images.add(grid_image(map, |x, y| half.boxes[map.idx(x, y)]));
-    let mut shut = vec![[0u8; 4]; map.tiles.len()];
-    for d in map.doors() {
-        let glass = d.kind == DoorKind::Glass;
-        shut[map.idx(d.x, d.y)] = [
-            255,
-            if d.along.x != 0.0 { 255 } else { 0 },
-            if glass { 255 } else { 0 },
-            0,
-        ];
-    }
-    let mut doors = grid_image(map, |x, y| shut[map.idx(x, y)]);
+    let shut = Shut::new(map).0;
+    let mut doors = grid_image(map, |x, y| {
+        let i = map.idx(x, y) * 4;
+        shut[i..i + 4].try_into().unwrap()
+    });
     doors.asset_usage = RenderAssetUsages::default();
     let doors = images.add(doors);
     world_materials.doors = doors.clone();
@@ -173,6 +171,7 @@ pub fn spawn_map(
                 map: vec4(map.w as f32, map.h as f32, TILE, 0.0),
                 misc: vec4(mode, 0.0, 0.0, 0.0),
                 guard: Vec4::ZERO,
+                torches: [Vec4::ZERO; MAX_TORCHES],
                 lights: [Vec4::ZERO; 2 * MAX_LIGHTS],
             },
             tiles: tiles.clone(),
@@ -230,6 +229,7 @@ pub fn ghost_material(world_materials: &WorldMaterials) -> Handle<WorldMaterial>
 }
 
 /// `guard`: his eye and the way he faces (cos, sin); zero for none.
+/// `torches`: every flashlight on, the same way, the robber's own first.
 #[allow(clippy::too_many_arguments)]
 pub fn write_params(
     eye: Vec2,
@@ -237,6 +237,7 @@ pub fn write_params(
     torch: bool,
     crouch: bool,
     guard: Vec4,
+    torches: &[Vec4],
     world_materials: &WorldMaterials,
     lamps: &Lamps,
     materials: &mut Assets<WorldMaterial>,
@@ -260,6 +261,10 @@ pub fn write_params(
         p.misc.z = if torch { 1.0 } else { 0.0 };
         p.misc.w = if crouch { 1.0 } else { 0.0 };
         p.guard = guard;
+        p.map.w = torches.len().min(MAX_TORCHES) as f32;
+        for (t, &at) in p.torches.iter_mut().zip(torches) {
+            *t = at;
+        }
         for (i, &&(at, colour)) in near.iter().enumerate() {
             p.lights[2 * i] = at;
             p.lights[2 * i + 1] = colour;
