@@ -11,11 +11,12 @@ use bevy::audio::{
     AudioPlayer, AudioSink, AudioSinkPlayback, AudioSource, PlaybackSettings, Volume,
 };
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 
 const MASTER: f32 = 0.7;
 const WALL: f32 = 0.55;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Clip {
     DoorOpen,
     DoorClose,
@@ -30,7 +31,7 @@ pub enum Clip {
 
 /// A noise at a point in the building: its sample, if it has one, and how
 /// many tiles off a guard hears it (half as far through walls; 0, never).
-#[derive(Message)]
+#[derive(Message, Clone, Serialize, Deserialize)]
 pub struct Noise {
     pub clip: Option<Clip>,
     pub at: Vec2,

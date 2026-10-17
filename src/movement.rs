@@ -1,6 +1,7 @@
 // bims_bevy's steered walk: its numbers, units and order of operations, so it feels the same.
 
 use bevy::math::{Vec2, vec2};
+use serde::{Deserialize, Serialize};
 use std::f32::consts::{PI, TAU};
 
 pub const TILE: f32 = 52.0;
@@ -182,7 +183,7 @@ fn cell_of(bounds: Aabb, p: Vec2) -> (i32, i32) {
     (q.x.floor() as i32, q.y.floor() as i32)
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Steer {
     /// `None` with no walk key down.
     pub walk: Option<f32>,
@@ -194,13 +195,13 @@ pub struct Steer {
     pub thick: bool,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 struct Roll {
     dir: f32,
     left: f32,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Body {
     pub pos: Vec2,
     /// The position at the start of the last step, which the picture blends from.

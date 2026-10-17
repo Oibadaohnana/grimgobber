@@ -4,8 +4,9 @@
 
 use bevy::math::{IVec2, ivec2};
 use bevy::prelude::Component;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum Kind {
     Crowbar,
     Flashlight,
@@ -48,14 +49,14 @@ impl Kind {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum At {
     Hands,
     /// The top-left cell it covers.
     Grid(IVec2),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct Item {
     pub kind: Kind,
     pub turned: bool,
@@ -78,7 +79,7 @@ impl Item {
 /// The inventory's cells, across and down.
 pub const GRID: IVec2 = ivec2(8, 5);
 
-#[derive(Component)]
+#[derive(Component, Clone, Serialize, Deserialize)]
 pub struct Inventory {
     pub items: Vec<Item>,
     /// Item indices bound to keys 1–4.

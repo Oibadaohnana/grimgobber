@@ -13,6 +13,7 @@ use crate::render::WorldMaterials;
 use crate::sight::Sight;
 use crate::sound::{Clip, Noise};
 use bevy::prelude::*;
+use bevy_replicon::prelude::ClientState;
 
 /// The bank as it stands, windows broken and all.
 #[derive(Resource)]
@@ -25,7 +26,10 @@ pub struct SmashPlugin;
 
 impl Plugin for SmashPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, smash.run_if(resource_exists::<Bank>));
+        app.add_systems(
+            Update,
+            smash.run_if(resource_exists::<Bank>.and_then(in_state(ClientState::Disconnected))),
+        );
     }
 }
 

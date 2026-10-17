@@ -13,6 +13,7 @@ use crate::render::{WorldMaterials, WorldPart, things_material};
 use crate::sound::{Clip, Noise};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
+use bevy_replicon::prelude::ClientState;
 use std::f32::consts::PI;
 
 const THROW: f32 = 8.0;
@@ -55,7 +56,7 @@ impl Plugin for ThrowPlugin {
             Update,
             (aim, throw, fly, pick_up, collect.after(crate::guard::knock))
                 .chain()
-                .run_if(resource_exists::<Level>),
+                .run_if(resource_exists::<Level>.and_then(in_state(ClientState::Disconnected))),
         );
     }
 }

@@ -1,6 +1,7 @@
 use crate::movement::{Aabb, TILE};
 use crate::rng::Rng;
 use bevy::math::{Vec2, vec2};
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,7 +57,7 @@ pub struct Tile {
 
 pub const NO_ROOM: u16 = u16::MAX;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DoorKind {
     Wood,
     Steel,
@@ -64,7 +65,7 @@ pub enum DoorKind {
 }
 
 /// One leaf in a doorway: it swings about `hinge`, lying along `along` shut.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct Door {
     pub x: i32,
     pub y: i32,

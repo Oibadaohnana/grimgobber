@@ -16,11 +16,15 @@ bevy = { version = "0.19", default-features = false, features = [
     "default_font",
     "multi_threaded",
     "png",
+    "serialize",
     "std",
     "vorbis",
     "wayland",
     "x11",
 ] }
+bevy_replicon = "0.44"
+bevy_replicon_renet = "0.20"
+serde = { version = "1", features = ["derive"] }
 
 # A debug build of a game engine is unplayably slow: Bevy is optimised even
 # in dev, our own code lightly so it recompiles quickly.

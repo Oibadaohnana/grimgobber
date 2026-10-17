@@ -7,6 +7,7 @@ mod inventory;
 mod inventory_ui;
 mod map;
 mod movement;
+mod net;
 mod paint;
 mod player;
 mod prompt;
@@ -24,7 +25,9 @@ use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::log::LogPlugin;
 use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
+use bevy::state::app::StatesPlugin;
 use bevy::window::{PresentMode, WindowMode, WindowResolution};
+use bevy_replicon::prelude::{Remote, Replicated};
 use std::time::Duration;
 
 use crate::player::{Controls, Level, LocalPlayer, Player, PlayerPlugin, spawn_robber};
@@ -57,13 +60,15 @@ fn main() {
     let seed = dev::env("BB_SEED")
         .and_then(|s| s.parse().ok())
         .unwrap_or_else(clock_seed);
+    let role = net::role();
     let mut app = App::new();
-    if std::env::args().any(|a| a == "--server") {
+    if let net::Role::Server(_) = role {
         app.add_plugins((
             MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(Duration::from_secs_f64(
                 movement::STEP as f64,
             ))),
             LogPlugin::default(),
+            StatesPlugin,
         ))
         .insert_resource(Headless);
     } else {
@@ -113,15 +118,21 @@ fn main() {
             ),
         );
     }
+    // A client waits for the server's seed.
+    let first = match role {
+        net::Role::Client(_) => None,
+        _ => Some(seed),
+    };
     app.add_message::<sound::Noise>()
         .add_plugins((
+            net::NetPlugin,
             PlayerPlugin,
             doors::DoorsPlugin,
             guard::GuardPlugin,
             dev::DevPlugin,
         ))
-        .insert_resource(NewMap(Some(seed)))
-        .add_systems(Update, build_map)
+        .insert_resource(NewMap(first))
+        .add_systems(Update, (served, build_map).chain())
         .run();
 }
 
@@ -172,10 +183,11 @@ fn keys(
     input: Res<ButtonInput<KeyCode>>,
     script: Res<dev::Script>,
     current: Option<Res<Current>>,
+    joined: Option<Res<net::Joined>>,
     mut new_map: ResMut<NewMap>,
     mut window: Query<&mut Window>,
 ) {
-    if input.just_pressed(KeyCode::F5) || script.pressed("NewBank") {
+    if (input.just_pressed(KeyCode::F5) || script.pressed("NewBank")) && joined.is_none() {
         let next = current.map_or(1, |c| {
             c.seed
                 .wrapping_mul(6364136223846793005)
@@ -194,10 +206,19 @@ fn keys(
     }
 }
 
+/// A client builds the bank the server's seed gives.
+fn served(seeds: Query<&net::Seed, (Added<net::Seed>, With<Remote>)>, mut new_map: ResMut<NewMap>) {
+    if let Some(seed) = seeds.iter().last() {
+        new_map.0 = Some(seed.0);
+    }
+}
+
+/// Who is in it comes from the server when playing on one.
 fn build_map(
     mut commands: Commands,
     mut new_map: ResMut<NewMap>,
     headless: Option<Res<Headless>>,
+    joined: Option<Res<net::Joined>>,
     old: Query<Entity, With<WorldPart>>,
 ) {
     let Some(seed) = new_map.0.take() else {
@@ -207,18 +228,21 @@ fn build_map(
         commands.entity(e).despawn();
     }
     let map = map::generate(seed);
-    doors::spawn_doors(&mut commands, &map);
-    guard::spawn_guard(&mut commands, &map);
     commands.insert_resource(sight::Sight::new(&map));
     commands.insert_resource(doors::Shut::new(&map));
     commands.insert_resource(Level::new(&map));
-    let spawn = dev::tile("BB_SPAWN").unwrap_or(map.spawn);
-    if headless.is_none() {
-        spawn_robber(&mut commands, spawn, true);
-    }
-    for (i, at) in dev::crew(&map, spawn).into_iter().enumerate() {
-        let bot = spawn_robber(&mut commands, at, false);
-        commands.entity(bot).insert(dev::Bot(i as f32 * 1.7));
+    if joined.is_none() {
+        commands.spawn((WorldPart, Replicated, net::Seed(seed)));
+        doors::spawn_doors(&mut commands, &map);
+        guard::spawn_guard(&mut commands, &map);
+        let spawn = dev::tile("BB_SPAWN").unwrap_or(map.spawn);
+        if headless.is_none() {
+            spawn_robber(&mut commands, spawn, true);
+        }
+        for (i, at) in dev::crew(&map, spawn).into_iter().enumerate() {
+            let bot = spawn_robber(&mut commands, at, false);
+            commands.entity(bot).insert(dev::Bot(i as f32 * 1.7));
+        }
     }
     let current = Current {
         seed,

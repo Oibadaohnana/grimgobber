@@ -17,6 +17,8 @@ use crate::sight::{DARK, Sight, VIEW, smoothstep};
 use crate::sound::{Clip, Noise};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
+use bevy_replicon::prelude::{ClientState, Remote, Replicated};
+use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
@@ -45,12 +47,14 @@ const GRIP: f32 = 20.0;
 /// His left shoulder in his own frame (the right is mirrored).
 const SHOULDER: Vec2 = vec2(1.0, 14.5);
 
-#[derive(Component)]
+#[derive(Component, Serialize, Deserialize)]
 pub struct Guard {
     pub body: Body,
     /// Tile centres to walk through, the next last.
+    #[serde(skip)]
     path: Vec<Vec2>,
     pub sees: bool,
+    #[entities]
     target: Option<Entity>,
     /// Where the robber was and which way he was going when last known,
     /// until the guard gets there, and how long since he saw him.
@@ -124,22 +128,31 @@ impl Plugin for GuardPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Order>()
             .init_resource::<Heard>()
-            .add_systems(FixedUpdate, walk.run_if(resource_exists::<Level>))
+            .add_systems(
+                FixedUpdate,
+                walk.run_if(resource_exists::<Level>.and_then(in_state(ClientState::Disconnected))),
+            )
             .add_systems(
                 Update,
-                detect.run_if(resource_exists::<Level>.and_then(resource_exists::<Sight>)),
+                detect.run_if(
+                    resource_exists::<Level>
+                        .and_then(resource_exists::<Sight>)
+                        .and_then(in_state(ClientState::Disconnected)),
+                ),
             );
         if crate::drawn(app) {
             app.add_systems(
                 PreUpdate,
-                order
-                    .after(bevy::input::InputSystems)
-                    .run_if(resource_exists::<Walkable>),
+                order.after(bevy::input::InputSystems).run_if(
+                    resource_exists::<Walkable>.and_then(in_state(ClientState::Disconnected)),
+                ),
             )
             .add_systems(
                 Update,
                 (
-                    knock.before(detect),
+                    knock
+                        .before(detect)
+                        .run_if(in_state(ClientState::Disconnected)),
                     (show, alarm, ghost, puzzled, asleep).chain().after(detect),
                 )
                     .run_if(resource_exists::<Level>.and_then(resource_exists::<Sight>)),
@@ -150,7 +163,7 @@ impl Plugin for GuardPlugin {
 
 pub fn spawn_guard(commands: &mut Commands, map: &Map) {
     let at = dev::tile("BB_GUARD").unwrap_or_else(|| post(map, &map.free()));
-    commands.spawn((WorldPart, Guard::new(at)));
+    commands.spawn((WorldPart, Replicated, Guard::new(at)));
     commands.insert_resource(Walkable::new(map));
 }
 
@@ -594,16 +607,23 @@ fn walk(level: Res<Level>, mut guards: Query<&mut Guard>) {
 
 fn show(
     fixed: Res<Time<Fixed>>,
-    mut roots: Query<(&Guard, &mut Transform)>,
+    time: Res<Time>,
+    mut roots: Query<(&Guard, &mut Transform, Has<Remote>)>,
     mut limbs: Query<(&Limb, &ChildOf, &mut Transform, &mut Visibility), Without<Guard>>,
 ) {
-    for (g, mut t) in &mut roots {
+    for (g, mut t, remote) in &mut roots {
         let b = &g.body;
-        t.translation = b.was.lerp(b.pos, fixed.overstep_fraction()).extend(9.0);
+        let at = t.translation.truncate();
+        t.translation = if remote && at.distance(b.pos) < 2.0 * TILE {
+            at + (b.pos - at) * approach(20.0, time.delta_secs())
+        } else {
+            b.was.lerp(b.pos, fixed.overstep_fraction())
+        }
+        .extend(9.0);
         t.rotation = Quat::from_rotation_z(b.heading);
     }
     for (limb, parent, mut t, mut vis) in &mut limbs {
-        let Ok((g, _)) = roots.get(parent.parent()) else {
+        let Ok((g, _, _)) = roots.get(parent.parent()) else {
             continue;
         };
         let b = &g.body;

@@ -54,6 +54,7 @@ game is. This file covers how to work on it.
 | `src/prompt.rs` | the "E ..." prompt: what E would do offers itself each frame (`Prompt`, cleared in `First`; the knockout first), shown where it says |
 | `src/guns.rs` | pistols: the robber's aimed by `player::gun_line` (bims' carry onto the pointer), fired and reloaded, the guard's drawn when the robber is armed and seen; hitscan `shoot` (`Sight::stops`), tracers, the reticle, health (`Gunplay`) |
 | `src/sound.rs` | the old game's door and footstep samples (`sounds/*.ogg`, embedded): `Noise` messages and walkers' loops, placed by distance and sight as `audio.js` did |
+| `src/net.rs` | playing together: `--server`/`--connect`, what is replicated (`Seed`, robbers with `Owner`, the guard, door leaves), each robber's `Moved` sent up, noises passed down |
 | `src/dev.rs` | the `BB_*` switches for headless runs |
 
 ## Things easy to get wrong
@@ -152,6 +153,20 @@ game is. This file covers how to work on it.
   meshes, `Transform` and marks when they appear (`Added<..>`), which is
   also how replicated entities will arrive. Guns, coins, smashing, the
   knockout and the guard's T order are client-only for now.
+- **Networking is server-authoritative but your feet are yours.** The
+  server (bevy_replicon over renet, UDP) replicates the guard, door leaves,
+  every robber and the `Seed`; a client builds the bank from the seed and
+  spawns nobody itself (`net::Joined`). Its own robber (`Owner` = its
+  client id, so `LocalPlayer`) is stepped locally and sent up as `Moved`;
+  the receive marker `ours` keeps the server's copy from overwriting it.
+  Only robbers in `player::Driven` are stepped. Authority systems (the
+  guard's mind, `swing`, the parked actions) run `in_state(
+  ClientState::Disconnected)`, which is the server and a game alone.
+  Other players and the guard ease to where the server says (`show`).
+  A changed component is sent to every player, so don't touch one that
+  didn't change (see `swing`). Bump `net::PROTOCOL` when what crosses
+  changes. Test locally: `--server` in the background and two `./hidden
+  ... --connect 127.0.0.1` with `BB_KEYS`.
 - **Doors' state is `doors::Shut`** (the doors texture's bytes, a resource
   the server has too); sight and hearing read it, and the client uploads it
   to the texture when it changes.

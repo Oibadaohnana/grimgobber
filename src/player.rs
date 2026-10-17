@@ -6,6 +6,7 @@ use crate::map::Map;
 use crate::movement::{
     Aabb, BODY_MARGIN, Body, MARCH_SPEED, STEP, Solids, Steer, TILE, approach, wrap_angle,
 };
+use crate::net::Owner;
 use crate::paint;
 use crate::render::{
     Lamps, WorldMaterial, WorldMaterials, WorldPart, things_material, write_params,
@@ -14,9 +15,12 @@ use bevy::ecs::query::QueryItem;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
+use bevy_replicon::prelude::{Remote, Replicated};
+use serde::{Deserialize, Serialize};
 use std::f32::consts::{PI, TAU};
 
-#[derive(Component)]
+#[derive(Component, Serialize, Deserialize)]
+#[require(Controls, Inventory, Reach, Swing, Gunplay)]
 pub struct Player {
     pub body: Body,
 }
@@ -56,7 +60,7 @@ impl Level {
     }
 }
 
-#[derive(Component, Default)]
+#[derive(Component, Default, Serialize, Deserialize)]
 pub struct Controls {
     pub walk: Option<f32>,
     pub aim: f32,
@@ -160,11 +164,7 @@ pub fn spawn_robber(commands: &mut Commands, at: Vec2, local: bool) -> Entity {
             Player {
                 body: Body::new(at, std::f32::consts::FRAC_PI_2),
             },
-            Controls::default(),
-            Inventory::default(),
-            Reach::default(),
-            Swing::default(),
-            Gunplay::default(),
+            Replicated,
         ))
         .id();
     if local {
@@ -369,7 +369,10 @@ fn read_controls(
     }
 }
 
-fn step(level: Res<Level>, mut players: Query<(&mut Player, &mut Controls)>) {
+/// The robbers this machine steps: its own, and the test crew where they live.
+type Driven = Or<(With<LocalPlayer>, (Without<Remote>, Without<Owner>))>;
+
+fn step(level: Res<Level>, mut players: Query<(&mut Player, &mut Controls), Driven>) {
     for (mut player, mut controls) in &mut players {
         let thick = level.hideout(player.body.pos).is_some();
         let b = &mut player.body;
@@ -388,13 +391,20 @@ fn step(level: Res<Level>, mut players: Query<(&mut Player, &mut Controls)>) {
     }
 }
 
-fn show(time: Res<Time<Fixed>>, mut players: Query<(&Player, &mut Shown)>) {
-    for (player, mut shown) in &mut players {
+fn show(
+    fixed: Res<Time<Fixed>>,
+    time: Res<Time>,
+    mut players: Query<(&Player, &mut Shown, Has<Remote>, Has<LocalPlayer>)>,
+) {
+    for (player, mut shown, remote, local) in &mut players {
         let b = &player.body;
-        shown.pos = if b.pos.distance(b.was) > 52.0 {
+        // Another player's steps come in on the line's time, not ours.
+        shown.pos = if remote && !local && b.pos.distance(shown.pos) < 2.0 * TILE {
+            shown.pos + (b.pos - shown.pos) * approach(20.0, time.delta_secs())
+        } else if b.pos.distance(b.was) > 52.0 {
             b.pos
         } else {
-            b.was + (b.pos - b.was) * time.overstep_fraction()
+            b.was + (b.pos - b.was) * fixed.overstep_fraction()
         };
     }
 }

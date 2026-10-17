@@ -16,6 +16,7 @@ use crate::rng::Rng;
 use crate::sight::Sight;
 use crate::sound::{Clip, Noise};
 use bevy::prelude::*;
+use bevy_replicon::prelude::ClientState;
 
 const MAG: u32 = 8;
 const RELOAD: f32 = 1.4;
@@ -82,9 +83,8 @@ impl Plugin for GunsPlugin {
         app.add_systems(Startup, spawn).add_systems(
             Update,
             (
-                holster,
-                trigger,
-                guard_guns.after(crate::guard::detect),
+                (holster, trigger, guard_guns.after(crate::guard::detect))
+                    .run_if(in_state(ClientState::Disconnected)),
                 fade,
                 reticle,
             )

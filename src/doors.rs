@@ -13,6 +13,8 @@ use crate::render::{WorldMaterials, WorldPart, things_material};
 use crate::sight::Sight;
 use crate::sound::{Clip, Noise};
 use bevy::prelude::*;
+use bevy_replicon::prelude::{ClientState, Replicated};
+use serde::{Deserialize, Serialize};
 use std::f32::consts::FRAC_PI_2;
 
 /// A hand-opened door: someone this close to the doorway's line, in front of it.
@@ -41,16 +43,18 @@ impl Shut {
     }
 }
 
-#[derive(Component)]
+#[derive(Component, Serialize, Deserialize)]
 pub struct Leaf {
     door: Door,
     tile: usize,
     open: f32,
     /// How open it is drawn.
+    #[serde(skip)]
     shown: f32,
     /// Which way across the wall it swings, picked as it starts to open.
     side: f32,
     /// The robber who opened it, whose arm goes out to it.
+    #[entities]
     robber: Option<Entity>,
 }
 
@@ -58,12 +62,20 @@ pub struct DoorsPlugin;
 
 impl Plugin for DoorsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, swing.run_if(resource_exists::<Level>));
+        app.add_systems(
+            Update,
+            (
+                swing
+                    .run_if(resource_exists::<Level>.and_then(in_state(ClientState::Disconnected))),
+                to_shut.run_if(resource_exists::<Shut>),
+            )
+                .chain(),
+        );
         if crate::drawn(app) {
             app.add_systems(
                 Update,
                 (upload, show)
-                    .after(swing)
+                    .after(to_shut)
                     .run_if(resource_exists::<Shut>.and_then(resource_exists::<Sight>)),
             );
         }
@@ -74,6 +86,7 @@ pub fn spawn_doors(commands: &mut Commands, map: &Map) {
     for door in map.doors() {
         commands.spawn((
             WorldPart,
+            Replicated,
             Leaf {
                 door,
                 tile: map.idx(door.x, door.y),
@@ -116,7 +129,6 @@ fn swing(
     me: Option<Single<&Player, With<LocalPlayer>>>,
     mut robbers: Query<(Entity, &Player, &mut Reach)>,
     guards: Query<&Guard>,
-    mut shut: ResMut<Shut>,
     mut leaves: Query<&mut Leaf>,
     mut noises: MessageWriter<Noise>,
 ) {
@@ -178,10 +190,17 @@ fn swing(
             Some((_, _, gap, speed)) => (1.0, OPENING.min((gap / speed.max(1.0)).max(0.05))),
             None => (0.0, CLOSING),
         };
-        leaf.open += (goal - was).clamp(-dt / rate, dt / rate);
-        if leaf.open != was {
-            shut.0[leaf.tile * 4] = ((1.0 - leaf.open) * 255.0) as u8;
+        // Untouched unless it moves: a changed leaf is sent to every player.
+        let open = was + (goal - was).clamp(-dt / rate, dt / rate);
+        if open != was {
+            leaf.open = open;
         }
+    }
+}
+
+fn to_shut(mut shut: ResMut<Shut>, leaves: Query<&Leaf, Changed<Leaf>>) {
+    for leaf in &leaves {
+        shut.0[leaf.tile * 4] = ((1.0 - leaf.open) * 255.0) as u8;
     }
 }
 

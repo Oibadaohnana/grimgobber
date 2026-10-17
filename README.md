@@ -141,6 +141,20 @@ cargo run            # a random bank
 BB_SEED=1234 cargo run
 ```
 
+### Together
+
+Up to 6 play one bank. One machine runs the server, headless; everyone
+else connects to it (UDP, port 8794 unless given):
+
+```bash
+cargo run -- --server              # or --server 9000
+cargo run -- --connect buggly.de   # or --connect 192.168.1.5:9000
+```
+
+The server runs the guard and the doors and says who is where; your own
+robber moves on your machine at once. Online, the crowbar, coins, the
+pistol and the knockout do nothing yet, and F5 is the server's.
+
 Inside the game: **Tab** opens the inventory, **1-4** are the quick slots,
 **E** knocks out a guard you are right behind,
 **F** switches the flashlight (in hand) on and off, **T** then a
