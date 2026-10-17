@@ -1,0 +1,34 @@
+[package]
+name = "grimgobber"
+version = "0.1.0"
+edition = "2024"
+description = "Bank Bobbery — a top-down heist on foot: bims' movement, a generated bank, ray-traced sight"
+
+[dependencies]
+# The same Bevy as bims_bevy (0.19), so the two share a cargo cache.
+bevy = { version = "0.19", default-features = false, features = [
+    "default_app",
+    "2d_bevy_render",
+    "bevy_audio",
+    "ui_api",
+    "ui_bevy_render",
+    "bevy_winit",
+    "default_font",
+    "multi_threaded",
+    "png",
+    "std",
+    "vorbis",
+    "wayland",
+    "x11",
+] }
+
+# A debug build of a game engine is unplayably slow: Bevy is optimised even
+# in dev, our own code lightly so it recompiles quickly.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+opt-level = 3

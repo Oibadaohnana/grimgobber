@@ -1,0 +1,158 @@
+//! Switches for headless runs (`./hidden` runs one on a headless compositor):
+//!
+//! - `BB_SEED=n`: the map's seed (else the clock's)
+//! - `BB_SMOKE_FRAMES=n`: run n frames of exactly 1/60 s each, then exit, silently
+//! - `BB_SCREENSHOT=path.png`: save the frame 30 before the end
+//! - `BB_KEYS="10:+W,40:-W,45:Roll"`: hold (+) or let go (-) of W A S D Shift
+//!   Up Down Left Right at those frames, or press `Roll`, `Torch`, `Crouch`,
+//!   `Inventory`, `Slot1`–`Slot4` or `Smash`, `Throw` or `Fire` (a left click), `Use` (E) or `Reload` once
+//! - `BB_AIM=degrees`: aim there instead of at the pointer (0 east, 90 north)
+//! - `BB_ZOOM=scale`: world units a pixel (0.7)
+//! - `BB_WINDOW=1400x900`: the window's size
+//! - `BB_SPAWN=x,y`: start on that tile
+//! - `BB_GUARD=x,y`: the guard starts on that tile (else in the security room)
+//! - `BB_UNPACED=1`: smoke frames as fast as they go, logging the average fps
+
+use bevy::prelude::*;
+use bevy::render::view::screenshot::{Screenshot, save_to_disk};
+use std::collections::HashSet;
+use std::time::{Duration, Instant};
+
+pub fn env(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|v| !v.is_empty())
+}
+
+/// A tile's centre from "x,y".
+pub fn tile(name: &str) -> Option<Vec2> {
+    let v = env(name)?;
+    let (x, y) = v.split_once(',')?;
+    Some(crate::map::tile_centre(x.parse().ok()?, y.parse().ok()?))
+}
+
+pub fn smoke_frames() -> Option<u32> {
+    env("BB_SMOKE_FRAMES").and_then(|v| v.parse().ok())
+}
+
+pub fn window_size() -> (u32, u32) {
+    env("BB_WINDOW")
+        .and_then(|v| {
+            let (w, h) = v.split_once('x')?;
+            Some((w.parse().ok()?, h.parse().ok()?))
+        })
+        .unwrap_or((1400, 900))
+}
+
+#[derive(Resource, Default)]
+pub struct Script {
+    events: Vec<(u32, String)>,
+    held: HashSet<String>,
+    pressed: HashSet<String>,
+    pub aim: Option<f32>,
+}
+
+impl Script {
+    pub fn from_env() -> Self {
+        let mut s = Script::default();
+        if let Some(keys) = env("BB_KEYS") {
+            for item in keys.split(',') {
+                if let Some((frame, what)) = item.trim().split_once(':')
+                    && let Ok(frame) = frame.parse()
+                {
+                    s.events.push((frame, what.to_string()));
+                }
+            }
+        }
+        s.aim = env("BB_AIM")
+            .and_then(|v| v.parse::<f32>().ok())
+            .map(f32::to_radians);
+        s
+    }
+
+    pub fn held(&self, name: &str) -> bool {
+        self.held.contains(name)
+    }
+
+    pub fn pressed(&self, name: &str) -> bool {
+        self.pressed.contains(name)
+    }
+}
+
+#[derive(Resource, Default)]
+pub struct Frames(pub u32);
+
+pub struct DevPlugin;
+
+impl Plugin for DevPlugin {
+    fn build(&self, app: &mut App) {
+        app.insert_resource(Script::from_env())
+            .init_resource::<Frames>()
+            .add_systems(First, (count, play_script).chain())
+            .add_systems(Last, smoke);
+        if smoke_frames().is_some() {
+            app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                Duration::from_secs_f64(1.0 / 60.0),
+            ));
+        }
+    }
+}
+
+fn count(mut frames: ResMut<Frames>) {
+    frames.0 += 1;
+}
+
+fn play_script(frames: Res<Frames>, mut script: ResMut<Script>) {
+    let s = &mut *script;
+    s.pressed.clear();
+    for (_, what) in s.events.iter().filter(|(f, _)| *f == frames.0) {
+        if let Some(key) = what.strip_prefix('+') {
+            s.held.insert(key.to_string());
+        } else if let Some(key) = what.strip_prefix('-') {
+            s.held.remove(key);
+        } else {
+            s.pressed.insert(what.clone());
+        }
+    }
+}
+
+fn smoke(
+    mut commands: Commands,
+    frames: Res<Frames>,
+    mut exit: MessageWriter<AppExit>,
+    mut last: Local<Option<Instant>>,
+    mut warm: Local<Option<Instant>>,
+) {
+    // Timed from here, once the shaders have compiled.
+    const WARM: u32 = 120;
+    if frames.0 == WARM {
+        *warm = Some(Instant::now());
+    }
+    let Some(limit) = smoke_frames() else {
+        return;
+    };
+    // Paced at 60 fps: a headless compositor has no vblank, and a frame count
+    // is only a time if each frame takes one.
+    if env("BB_UNPACED").is_none()
+        && let Some(at) = *last
+    {
+        std::thread::sleep(Duration::from_secs_f64(1.0 / 60.0).saturating_sub(at.elapsed()));
+    }
+    *last = Some(Instant::now());
+    if frames.0 + 30 == limit
+        && let Some(path) = env("BB_SCREENSHOT")
+    {
+        commands
+            .spawn(Screenshot::primary_window())
+            .observe(save_to_disk(path));
+    }
+    if frames.0 >= limit {
+        if let Some(at) = *warm {
+            let n = frames.0.saturating_sub(WARM);
+            let secs = at.elapsed().as_secs_f64();
+            info!(
+                "smoke run: {n} frames after the first {WARM} in {secs:.2} s, {:.0} fps",
+                n as f64 / secs
+            );
+        }
+        exit.write(AppExit::Success);
+    }
+}

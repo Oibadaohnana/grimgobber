@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Run something with its window on a display nobody can see (after
+# bims_bevy's ./hidden):
+#
+#   BB_SMOKE_FRAMES=90 BB_SCREENSHOT=shot.png ./hidden target/debug/grimgobber
+#
+# Starts a headless Wayland compositor (weston, drawing with the GPU on a
+# memory output), runs the command on it and takes it down after. The
+# output is BB_WINDOW's size (1400x900 unless asked); weston's kiosk shell
+# gives the one window all of it, so a screenshot is exactly that size.
+set -uo pipefail
+cd "$(dirname "$0")"
+
+if [ $# -eq 0 ]; then
+  sed -n '2,/^set -uo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
+  exit 2
+fi
+
+if ! command -v weston >/dev/null || [[ "${LD_LIBRARY_PATH:-}" != *vulkan-loader* ]]; then
+  exec nix-shell shell.nix --run "./hidden $(printf '%q ' "$@")"
+fi
+
+: "${XDG_RUNTIME_DIR:?weston wants XDG_RUNTIME_DIR for its socket}"
+
+size=${BB_WINDOW:-1400x900}
+socket=bb-hidden-$$
+log=$(mktemp -t bb-hidden.XXXXXX)
+
+weston --backend=headless --renderer=gl --shell=kiosk --no-config \
+  --socket="$socket" --width="${size%x*}" --height="${size#*x}" \
+  --idle-time=0 --log="$log" >/dev/null 2>&1 &
+weston_pid=$!
+cleanup() {
+  kill "$weston_pid" 2>/dev/null
+  wait "$weston_pid" 2>/dev/null
+  rm -f "$log"
+}
+trap cleanup EXIT
+
+for _ in $(seq 100); do
+  [ -S "$XDG_RUNTIME_DIR/$socket" ] && break
+  kill -0 "$weston_pid" 2>/dev/null || break
+  sleep 0.05
+done
+if ! [ -S "$XDG_RUNTIME_DIR/$socket" ]; then
+  echo "hidden: the headless compositor did not come up:" >&2
+  sed 's/^/  /' "$log" >&2
+  exit 1
+fi
+
+env -u DISPLAY WAYLAND_DISPLAY="$socket" "$@"
