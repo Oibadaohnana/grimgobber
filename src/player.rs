@@ -690,9 +690,9 @@ fn zoom(
     if h <= 0.0 {
         return;
     }
-    // Zoomed out at most to 12.5 tiles above and below the robber, and he starts
-    // there unless BB_ZOOM says otherwise.
-    let most = ortho.scale * 25.0 * TILE / h;
+    // Zoomed out at most to just past his sight above and below him, and he
+    // starts there unless BB_ZOOM says otherwise.
+    let most = ortho.scale * 2.0 * (crate::sight::VIEW + 0.5) * TILE / h;
     let goal = goal.get_or_insert_with(|| {
         if crate::dev::env("BB_ZOOM").is_none() {
             ortho.scale = most;

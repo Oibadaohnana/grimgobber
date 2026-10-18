@@ -63,10 +63,11 @@ const TORCH_COLOUR: vec3<f32> = vec3<f32>(1.0, 0.96, 0.86);
 const TORCH_POWER: f32 = 1.5;
 // In tiles: the flashlight's reach, and sight in the dark and at most.
 const TORCH_REACH: f32 = 15.0;
-const DARK: f32 = 5.0;
-const VIEW: f32 = 12.0;
-// The guard's sight in tiles where lit (in the dark DARK), and half his cone.
+const DARK: f32 = 3.75;
+const VIEW: f32 = 6.0;
+// The guard's sight in tiles where lit and in the dark, and half his cone.
 const GUARD_VIEW: f32 = 10.0;
+const GUARD_DARK: f32 = 5.0;
 const GUARD_CONE: f32 = 0.7853982;
 const WATCHED: vec3<f32> = vec3<f32>(1.0, 0.42, 0.38);
 const HEARD: vec3<f32> = vec3<f32>(0.70, 0.85, 1.0);
@@ -395,7 +396,7 @@ fn watched(w: vec2<f32>, dst: Spot, torch: vec3<f32>) -> f32 {
     let tile = P.map.z;
     let cone = smoothstep(cos(GUARD_CONE + 0.05), cos(GUARD_CONE - 0.05), dot(off, ahead) / max(dist, 1e-3));
     let lit = in_map(dst.cell) && textureLoad(extra, dst.cell, 0).a > 0.5;
-    let reach = mix(select(DARK, GUARD_VIEW, lit), GUARD_VIEW, smoothstep(0.02, 0.06, luma(torch))) * tile;
+    let reach = mix(select(GUARD_DARK, GUARD_VIEW, lit), GUARD_VIEW, smoothstep(0.02, 0.06, luma(torch))) * tile;
     let near = cone * (1.0 - smoothstep(reach - 0.8 * tile, reach, dist));
     if near <= 0.0 {
         return 0.0;

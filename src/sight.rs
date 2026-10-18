@@ -7,8 +7,8 @@ use bevy::prelude::*;
 use std::collections::BinaryHeap;
 
 /// The robber's sight in tiles, as in world.wgsl: in a lit room or outside, and in a dark one.
-pub const VIEW: f32 = 12.0;
-pub const DARK: f32 = 5.0;
+pub const VIEW: f32 = 6.0;
+pub const DARK: f32 = 3.75;
 const EYE_SPREAD: f32 = 7.0;
 // The flashlight, as in world.wgsl: its lens ahead of him, its cone's inner and outer half angles.
 const LENS_AHEAD: f32 = 16.0;
@@ -271,9 +271,9 @@ mod tests {
                 let robber = vec2(car.centre().x, car.max.y + 24.0);
                 (robber, vec2(car.centre().x, car.min.y - 4.0 * TILE))
             })
-            .find(|&(robber, guard)| sight.seen(robber, guard, VIEW, false, &[]) > 0.5)
+            .find(|&(robber, guard)| sight.seen(robber, guard, 12.0, false, &[]) > 0.5)
             .expect("a car to look over");
-        assert!(sight.seen(robber, guard, VIEW, true, &[]) < 0.5);
+        assert!(sight.seen(robber, guard, 12.0, true, &[]) < 0.5);
     }
 
     #[test]
@@ -284,8 +284,8 @@ mod tests {
         let s = row();
         assert!(seen(&s, 0, 9, 10.0));
         assert!(!seen(&s, 0, 9, 8.0));
-        assert!(seen(&s, 11, 19, DARK + 4.0));
-        assert!(!seen(&s, 11, 19, DARK));
+        assert!(seen(&s, 11, 19, 9.0));
+        assert!(!seen(&s, 11, 19, 5.0));
         assert!(!seen(&s, 8, 12, 10.0));
     }
 }

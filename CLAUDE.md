@@ -88,12 +88,14 @@ drawing and sound). Then:
   at the robber's hand, so a body inside an opaque box would light nothing.
   Make every opaque prop solid; a test enforces this.
 - **Sight** (`seen`): three rays from the eyes, blocked by walls and tall
-  furniture, within 12 tiles in a lit room or outside and 5 in a dark one
+  furniture, within 6 tiles in a lit room or outside and 3.75 in a dark one
   (`Map::lit`, in `extra.a`). Per room, not per pixel: by the light on each
-  spot, far lamp pools showed as islands. Inside the flashlight's cone (`beam`) sight
-  is the full 12 however dark it is. The flashlight's light (`torch_at`)
-  casts its own shadows. Crouched (`misc.w`), the first half-height object
-  a sight ray crosses hides what lies more than 2 tiles past it
+  spot, far lamp pools showed as islands. Inside the flashlight's cone
+  (`beam`) sight is the full 6 however dark it is. The zoom goes out to
+  just past it (`player::zoom`). The guard's own ranges (10 lit, 5 dark)
+  are separate. The flashlight's light (`torch_at`) casts its own shadows.
+  Crouched (`misc.w`), the first half-height object a sight ray crosses
+  hides what lies more than 2 tiles past it
   (`trace(.., low)`, the `low_boxes` texture, ids in `extra.b`). Which
   props are half height is `PropKind::is_low`.
 - **What skips what in a trace.** A ray ignores the box of the object its

@@ -13,7 +13,7 @@ use crate::movement::{BODY_MARGIN, Body, MARCH_SPEED, STEP, Solids, Steer, TILE,
 use crate::paint;
 use crate::player::{Controls, Level, LocalPlayer, Player, Reach, Shown};
 use crate::render::{MainCamera, WorldMaterials, WorldPart, ghost_material, things_material};
-use crate::sight::{DARK, Sight, VIEW, smoothstep};
+use crate::sight::{Sight, smoothstep};
 use crate::sound::{Clip, Noise};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -23,8 +23,9 @@ use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
 
-// Both also in world.wgsl.
-const GUARD_VIEW: f32 = VIEW - 2.0;
+// His sight in tiles, lit and dark, and his cone: all also in world.wgsl.
+const GUARD_VIEW: f32 = 10.0;
+const GUARD_DARK: f32 = 5.0;
 /// Half his cone of sight, softened by 0.05 rad either side.
 const CONE: f32 = FRAC_PI_4;
 /// Chasing, he stops this close to the robber.
@@ -702,7 +703,7 @@ pub fn detect(
             let reach = if c.torch || sight.lit_at(b.pos) {
                 GUARD_VIEW
             } else {
-                DARK
+                GUARD_DARK
             };
             let hidden = level
                 .hideout(b.pos)

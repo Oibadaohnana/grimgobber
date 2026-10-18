@@ -30,9 +30,10 @@ movement, light and one guard to hide from.
   long, with a soft edge, throwing shadows away from him. With it off he
   throws none. Glass lets light through.
 - **Sight is ray traced too.** You see only what the robber could see:
-  walls and tall furniture block it, glass doesn't. You see 12 tiles into a
-  room with its lights on (and outside), 5 into a dark one. Inside the
-  flashlight's beam you see the full 12 tiles, as in a lit room. Anything
+  walls and tall furniture block it, glass doesn't. You see 6 tiles into a
+  room with its lights on (and outside), 3.75 into a dark one. Inside the
+  flashlight's beam you see the full 6 tiles, as in a lit room. You can
+  zoom out only as far as you can see. Anything
   out of sight is drawn under a grey-blue fog.
 - **Doors** open as you reach them, half a tile off: the robber puts his
   arm out and pushes, the door swings away from him, and it swings shut
@@ -160,7 +161,7 @@ Inside the game: **Tab** opens the inventory, **1-4** are the quick slots,
 **F** switches the flashlight (in hand) on and off, **T** then a
 left click sends the guard somewhere, **R** reloads the pistol in hand, **F5** builds a
 new bank, the **mouse wheel** zooms (it starts out as far as it goes,
-12.5 tiles above and below the robber), and **F11** toggles full screen.
+6.5 tiles above and below the robber), and **F11** toggles full screen.
 
 `cargo test` checks the movement's feel against bims' numbers. It also
 checks that on 60 seeds every room is reachable, that the same seed always
