@@ -12,7 +12,7 @@ use crate::map::{Map, RoomKind, tile_centre, tile_of};
 use crate::movement::{BODY_MARGIN, Body, MARCH_SPEED, STEP, Solids, Steer, TILE, approach};
 use crate::paint;
 use crate::player::{Controls, Level, LocalPlayer, Player, Reach, Shown};
-use crate::render::{WorldMaterials, WorldPart, ghost_material, things_material};
+use crate::render::{MainCamera, WorldMaterials, WorldPart, ghost_material, things_material};
 use crate::sight::{DARK, Sight, VIEW, smoothstep};
 use crate::sound::{Clip, Noise};
 use bevy::prelude::*;
@@ -569,7 +569,7 @@ fn order(
     keys: Res<ButtonInput<KeyCode>>,
     mut mouse: ResMut<ButtonInput<MouseButton>>,
     window: Query<&Window, With<PrimaryWindow>>,
-    camera: Query<(&Camera, &GlobalTransform)>,
+    camera: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
     walkable: Res<Walkable>,
     inventory: Single<&Inventory, With<LocalPlayer>>,
     mut armed: ResMut<Order>,

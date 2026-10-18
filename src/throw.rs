@@ -9,7 +9,7 @@ use crate::inventory::{Inventory, Kind};
 use crate::movement::{Solids, TILE};
 use crate::paint;
 use crate::player::{Level, LocalPlayer, Player, Shown, Swing};
-use crate::render::{WorldMaterials, WorldPart, things_material};
+use crate::render::{MainCamera, WorldMaterials, WorldPart, things_material};
 use crate::sound::{Clip, Noise};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -86,7 +86,7 @@ fn spawn(
 /// The pointer in the world.
 fn pointer(
     window: &Query<&Window, With<PrimaryWindow>>,
-    camera: &Query<(&Camera, &GlobalTransform)>,
+    camera: &Query<(&Camera, &GlobalTransform), With<MainCamera>>,
 ) -> Option<Vec2> {
     let c = window.single().ok()?.cursor_position()?;
     let (camera, at) = camera.single().ok()?;
@@ -98,7 +98,7 @@ fn aim(
     me: Single<(&Inventory, &Player, &Shown), With<LocalPlayer>>,
     level: Res<Level>,
     window: Query<&Window, With<PrimaryWindow>>,
-    camera: Query<(&Camera, &GlobalTransform)>,
+    camera: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
     mut marks: Query<(&Aim, &mut Transform, &mut Visibility)>,
 ) {
     let (inventory, player, shown) = *me;
@@ -142,7 +142,7 @@ fn throw(
     mouse: Res<ButtonInput<MouseButton>>,
     script: Res<Script>,
     window: Query<&Window, With<PrimaryWindow>>,
-    camera: Query<(&Camera, &GlobalTransform)>,
+    camera: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
     me: Single<(&Player, &mut Inventory, &mut Swing), With<LocalPlayer>>,
     level: Res<Level>,
     coin: Res<CoinMesh>,

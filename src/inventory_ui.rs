@@ -9,6 +9,7 @@ use crate::guard::Guard;
 use crate::inventory::{At, GRID, Inventory, Item, Kind, size_of};
 use crate::paint::{self, Frame, Hex, Painter, hex};
 use crate::player::{LocalPlayer, Player};
+use crate::render::MainCamera;
 use bevy::input::InputSystems;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -156,7 +157,7 @@ fn spawn(
     mut commands: Commands,
     mut materials: ResMut<Assets<ColorMaterial>>,
     mut meshes: ResMut<Assets<Mesh>>,
-    camera: Query<Entity, With<Camera2d>>,
+    camera: Query<Entity, With<MainCamera>>,
 ) {
     let Ok(camera) = camera.single() else {
         return;
@@ -353,7 +354,7 @@ fn draw(
     drag: Res<Drag>,
     guards: Query<(Entity, &Guard)>,
     window: Query<&Window, With<PrimaryWindow>>,
-    projection: Query<&Projection, With<Camera2d>>,
+    projection: Query<&Projection, With<MainCamera>>,
     mut screen: Query<(&Mesh2d, &mut Transform), With<Screen>>,
     words: Query<Entity, With<Words>>,
     mut meshes: ResMut<Assets<Mesh>>,

@@ -9,7 +9,7 @@ use crate::movement::{
 use crate::net::Owner;
 use crate::paint;
 use crate::render::{
-    Lamps, WorldMaterial, WorldMaterials, WorldPart, things_material, write_params,
+    MainCamera, WorldMaterial, WorldMaterials, WorldPart, things_material, write_params,
 };
 use bevy::ecs::query::QueryItem;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
@@ -309,7 +309,7 @@ fn read_controls(
     keys: Res<ButtonInput<KeyCode>>,
     script: Res<Script>,
     window: Query<&Window, With<PrimaryWindow>>,
-    camera: Query<(&Camera, &GlobalTransform)>,
+    camera: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
     me: Single<(&Shown, &Inventory, &mut Controls), With<LocalPlayer>>,
 ) {
     let (shown, inventory, mut controls) = me.into_inner();
@@ -637,9 +637,8 @@ fn follow(
     robbers: Query<(Entity, &Shown, &Player, &Controls)>,
     guards: Query<&Guard>,
     time: Res<Time<Fixed>>,
-    mut camera: Query<&mut Transform, (With<Camera2d>, Without<Player>)>,
+    mut camera: Query<&mut Transform, (With<MainCamera>, Without<Player>)>,
     world_materials: Res<WorldMaterials>,
-    lamps: Res<Lamps>,
     mut materials: ResMut<Assets<WorldMaterial>>,
 ) {
     let (me, shown, player, controls) = *me;
@@ -670,14 +669,13 @@ fn follow(
             .map_or(Vec4::ZERO, |g| g.view(time.overstep_fraction())),
         &torches,
         &world_materials,
-        &lamps,
         &mut materials,
     );
 }
 
 fn zoom(
     mut wheel: MessageReader<MouseWheel>,
-    mut projection: Query<&mut Projection, With<Camera2d>>,
+    mut projection: Query<&mut Projection, With<MainCamera>>,
     mut goal: Local<Option<f32>>,
     time: Res<Time>,
 ) {

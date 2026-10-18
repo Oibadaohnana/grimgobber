@@ -2,6 +2,7 @@
 //! each frame (the first to, after the knockout, has it), and the prompt
 //! shows over where it says.
 
+use crate::render::MainCamera;
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
 
@@ -76,7 +77,7 @@ fn spawn_prompt(mut commands: Commands) {
 /// On the screen where it says, saying what it says.
 fn show(
     prompt: Res<Prompt>,
-    camera: Query<(&Camera, &GlobalTransform)>,
+    camera: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
     mut shown: Query<(&mut Node, &mut Visibility, &ComputedNode), With<Shown>>,
     mut label: Query<&mut Text, With<Label>>,
 ) {

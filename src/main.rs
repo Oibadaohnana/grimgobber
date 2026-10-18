@@ -31,7 +31,7 @@ use bevy_replicon::prelude::{Remote, Replicated};
 use std::time::Duration;
 
 use crate::player::{Controls, Level, LocalPlayer, Player, PlayerPlugin, spawn_robber};
-use crate::render::{Lamps, RenderPlugin, WorldMaterial, WorldMaterials, WorldPart};
+use crate::render::{MainCamera, RenderPlugin, WorldMaterial, WorldMaterials, WorldPart};
 
 #[derive(Resource)]
 struct NewMap(Option<u64>);
@@ -100,7 +100,6 @@ fn main() {
         ))
         .insert_resource(ClearColor(Color::srgb(0.01, 0.012, 0.02)))
         .init_resource::<WorldMaterials>()
-        .init_resource::<Lamps>()
         .add_systems(Startup, setup)
         .add_systems(
             Update,
@@ -148,6 +147,7 @@ fn setup(mut commands: Commands) {
         .and_then(|z| z.parse().ok())
         .unwrap_or(0.7f32);
     commands.spawn((
+        MainCamera,
         Camera2d,
         Hdr,
         Tonemapping::None,
@@ -265,7 +265,6 @@ fn draw_map(
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<WorldMaterial>>,
     mut world_materials: ResMut<WorldMaterials>,
-    mut lamps: ResMut<Lamps>,
 ) {
     render::spawn_map(
         &mut commands,
@@ -274,7 +273,6 @@ fn draw_map(
         &mut images,
         &mut materials,
         &mut world_materials,
-        &mut lamps,
     );
 }
 

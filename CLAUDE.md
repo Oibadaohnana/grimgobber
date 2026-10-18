@@ -46,8 +46,9 @@ drawing and sound). Then:
 - To check the frame rate, add `BB_UNPACED=1` and read the "smoke run: …
   fps" line. On the RX 7800 XT, in a dev build, it is about 800 fps at
   1400×900 (720 with the flashlight off, 760 with it on in a dark room).
-  On the laptop's Radeon 780M it is about 175 fps at 1400×900 and 76 at
-  2560×1440, the same in release: the per-pixel tracing bounds it.
+  On the laptop's Radeon 780M it is about 270 fps at 1400×900 and 120 at
+  2560×1440 (lamps baked), the same in release: the per-pixel tracing
+  bounds it.
 - `SEED=n cargo test print_map -- --ignored --nocapture` prints a map as
   ASCII (`#` brick, `=` drywall, `V` vault, `:` glass, `D` door, `o`
   furniture, letters for rooms).
@@ -59,7 +60,7 @@ drawing and sound). Then:
 | `src/movement.rs` | bims' steered walk: `Body`, `Steer`, `Solids`, `Aabb::push_out_round`. Pure arithmetic, stepped at 60 Hz. |
 | `src/map.rs` | the generator: tiles, rooms, props, lamps; `solids()` for movement, `occluders()` for the ray tracer |
 | `src/paint.rs` | `Painter` (vertex-coloured triangles) and every prop's, the robber's and the guard's picture |
-| `src/render.rs` | `WorldMaterial`, the three grid textures, spawning a map, writing the robber, the flashlight and the lamps each frame |
+| `src/render.rs` | `WorldMaterial`, the grid textures, spawning a map, baking the lamps into the light maps, writing the robber and the flashlights each frame |
 | `src/shaders/world.wgsl` | the per-pixel ray tracing (lamp and flashlight shadows), the procedural floors and walls |
 | `src/player.rs` | input → `Controls` (PreUpdate), the body's fixed step (FixedUpdate), the picture blended between steps, camera, zoom |
 | `src/doors.rs` | door leaves (`Map::doors`): pushed open within reach (and `Reach` for his arm), the glass entrance by sensor; how shut each is in `Shut`, uploaded to the doors texture |
@@ -144,6 +145,14 @@ drawing and sound). Then:
 - **Three world materials**: ground (mode 0), things (1) and ghosts (2,
   `render::ghost_material`), which draw any mesh pale and see-through,
   unlit and unfogged.
+- **Lamps are baked**, not traced per pixel: two light maps (16 texels a
+  tile, half floats), the ground's and things' (they differ under
+  furniture and in doorways), each drawn by a `Bake` camera rendering
+  `lamps_at` in modes 3 and 4. `render::bake` redraws them when `Shut` or
+  `smash::Bank` changes, and keeps going while a pipeline compiles (or the
+  first bake draws nothing). Anything new that changes what blocks a lamp
+  must trigger a bake too. So there are three cameras: queries for the
+  player's view take `With<MainCamera>`.
 - **Only a held flashlight shines**: `read_controls` clears `Controls::torch`
   unless the flashlight is in his hands, so everything that reads `torch`
   (the shader, the guard, sight and sound) follows. The robber's tools are

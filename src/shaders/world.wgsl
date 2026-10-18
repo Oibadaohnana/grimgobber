@@ -1,5 +1,6 @@
 // The ground (mode 0), every mesh over it (mode 1) and ghosts (mode 2), lit per pixel by lamps
-// and the flashlight, each shadowed by rays traced through the tile grid.
+// and the flashlight, each shadowed by rays traced through the tile grid. The lamps' light is
+// traced only into the light maps (mode 3 the ground's, 4 things', render.rs) and read from them.
 // Sight is a range, not a ray: no rays are traced from the eye.
 
 #import bevy_sprite::mesh2d_vertex_output::VertexOutput
@@ -22,6 +23,9 @@ struct Params {
 @group(#{MATERIAL_BIND_GROUP}) @binding(5) var doors: texture_2d<f32>; // how shut, lying along x, glass
 // A smash's reach: sixteenths of a tile of it left, how strongly shown (hearing.rs).
 @group(#{MATERIAL_BIND_GROUP}) @binding(6) var heard: texture_2d<f32>;
+// The lamps' light, ground's or things' by the mode; a light map is not bound while drawn into.
+@group(#{MATERIAL_BIND_GROUP}) @binding(7) var baked: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(8) var baked_sampler: sampler;
 
 const FLOOR_GRASS: u32 = 0u;
 const FLOOR_ASPHALT: u32 = 1u;
@@ -227,9 +231,13 @@ fn clear_share(run: f32) -> f32 {
     return 1.0 - smoothstep(0.0, STOP_SOFT, run);
 }
 
-fn light_at(w: vec2<f32>, dst: Spot) -> vec3<f32> {
+fn ambient(dst: Spot) -> vec3<f32> {
     let indoor = in_map(dst.cell) && textureLoad(extra, dst.cell, 0).g > 0.5;
-    var light = select(vec3<f32>(0.050, 0.062, 0.105), vec3<f32>(0.018, 0.020, 0.030), indoor);
+    return select(vec3<f32>(0.050, 0.062, 0.105), vec3<f32>(0.018, 0.020, 0.030), indoor);
+}
+
+fn lamps_at(w: vec2<f32>, dst: Spot) -> vec3<f32> {
+    var light = vec3<f32>(0.0);
     for (var i = 0; i < i32(P.misc.y); i++) {
         let lp = P.lights[2 * i];
         let d = distance(lp.xy, w);
@@ -242,6 +250,12 @@ fn light_at(w: vec2<f32>, dst: Spot) -> vec3<f32> {
         light += P.lights[2 * i + 1].rgb * (lp.w * fall * clear_share(run.x));
     }
     return light;
+}
+
+fn baked_at(at: vec2<f32>) -> vec3<f32> {
+    let size = P.map.xy * P.map.z;
+    let uv = vec2<f32>(at.x / size.x, 1.0 - at.y / size.y);
+    return textureSampleLevel(baked, baked_sampler, uv, 0.0).rgb;
 }
 
 // How far inside a flashlight's cone a point is, 0 to 1.
@@ -410,7 +424,13 @@ fn heard_at(w: vec2<f32>) -> vec2<f32> {
     return mix(lo, hi, f.y);
 }
 
-fn shade(albedo: vec3<f32>, glow: bool, ground: bool, at: vec2<f32>) -> vec4<f32> {
+// What a pixel at `at` stands for: a wall's top is moved to its face.
+struct Point {
+    w: vec2<f32>,
+    dst: Spot,
+};
+
+fn point_of(at: vec2<f32>, ground: bool) -> Point {
     var w = at;
     var dst = spot_of(w);
     if dst.in_box && dst.object == 0u {
@@ -424,12 +444,19 @@ fn shade(albedo: vec3<f32>, glow: bool, ground: bool, at: vec2<f32>) -> vec4<f32
         dst.low = 0u;
     }
     dst.door = !ground;
+    return Point(w, dst);
+}
+
+fn shade(albedo: vec3<f32>, glow: bool, ground: bool, at: vec2<f32>) -> vec4<f32> {
+    let p = point_of(at, ground);
+    let w = p.w;
+    let dst = p.dst;
     let s = seen(w, dst);
     if glow {
         return vec4<f32>(albedo * mix(0.35, 1.0, s), s);
     }
     let torch = torch_at(w, dst);
-    let light = light_at(w, dst) + torch;
+    let light = ambient(dst) + baked_at(at) + torch;
     let lit = albedo * (light + vec3<f32>(0.075, 0.08, 0.11));
     let dim = albedo * light;
     let fog = mix(dim, vec3<f32>(luma(dim)), 0.85) * 0.2 + albedo * vec3<f32>(0.004, 0.006, 0.014);
@@ -728,6 +755,10 @@ fn wall_colour(kind: u32, cell: vec2<i32>, f: vec2<f32>, w: vec2<f32>, under: ve
 @fragment
 fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
     let w = mesh.world_position.xy;
+    if P.misc.x > 2.5 {
+        let p = point_of(w, P.misc.x < 3.5);
+        return vec4<f32>(lamps_at(p.w, p.dst), 1.0);
+    }
     if P.misc.x < 0.5 {
         let tile = P.map.z;
         let cell = vec2<i32>(floor(w / tile));
