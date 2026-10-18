@@ -48,9 +48,10 @@ impl Plugin for RenderPlugin {
 #[derive(Component)]
 pub struct MainCamera;
 
-/// Draws one light map: every lamp's light, shadowed, traced once instead of every frame.
+/// Draws one light map (0 the ground's, 1 things'): every lamp's light,
+/// shadowed, traced once instead of every frame.
 #[derive(Component)]
-struct Bake;
+struct Bake(usize);
 
 /// Whether a pipeline is still compiling, so that a bake may have drawn nothing.
 #[derive(Resource, Clone, Default)]
@@ -61,28 +62,41 @@ fn note_compiling(cache: Res<PipelineCache>, compiling: Res<Compiling>) {
     compiling.0.store(waiting, Ordering::Relaxed);
 }
 
-/// Bakes for a new bank, a door moving or a window smashed, and goes on a few
-/// frames: the light map's material may not be ready in the first.
+/// Bakes both maps for a new bank, going on a few frames: the light maps'
+/// material may not be ready in the first. For a door moving or a window
+/// smashed, one map a frame, taking turns, so a swing costs half as much.
 fn bake(
     mut cameras: Query<(&mut Camera, Ref<Bake>)>,
     shut: Option<Res<Shut>>,
     bank: Option<Res<Bank>>,
     compiling: Res<Compiling>,
-    mut left: Local<u8>,
+    // Frames each map still wants, and the one drawn last.
+    mut left: Local<[u8; 2]>,
+    mut last: Local<usize>,
 ) {
-    if shut.is_some_and(|s| s.is_changed())
-        || bank.is_some_and(|b| b.is_changed())
-        || compiling.0.load(Ordering::Relaxed)
-        || cameras.iter().any(|(_, b)| b.is_added())
-    {
-        *left = 3;
+    if compiling.0.load(Ordering::Relaxed) || cameras.iter().any(|(_, b)| b.is_added()) {
+        *left = [3; 2];
+    } else if shut.is_some_and(|s| s.is_changed()) || bank.is_some_and(|b| b.is_changed()) {
+        *left = left.map(|n| n.max(1));
     }
-    for (mut camera, _) in &mut cameras {
-        if camera.is_active != (*left > 0) {
-            camera.is_active = *left > 0;
+    let both = left.iter().all(|&n| n > 1);
+    let next = if left[1 - *last] > 0 {
+        1 - *last
+    } else {
+        *last
+    };
+    for (mut camera, b) in &mut cameras {
+        let on = left[b.0] > 0 && (both || b.0 == next);
+        if camera.is_active != on {
+            camera.is_active = on;
         }
     }
-    *left = left.saturating_sub(1);
+    if both {
+        *left = left.map(|n| n - 1);
+    } else if left[next] > 0 {
+        left[next] -= 1;
+        *last = next;
+    }
 }
 
 #[derive(ShaderType, Clone, Debug)]
@@ -274,7 +288,7 @@ pub fn spawn_map(
         ));
         commands.spawn((
             WorldPart,
-            Bake,
+            Bake(i),
             Camera2d,
             Camera {
                 is_active: false,

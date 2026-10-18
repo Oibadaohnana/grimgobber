@@ -149,8 +149,9 @@ drawing and sound). Then:
   tile, half floats), the ground's and things' (they differ under
   furniture and in doorways), each drawn by a `Bake` camera rendering
   `lamps_at` in modes 3 and 4. `render::bake` redraws them when `Shut` or
-  `smash::Bank` changes, and keeps going while a pipeline compiles (or the
-  first bake draws nothing). Anything new that changes what blocks a lamp
+  `smash::Bank` changes (one map a frame, taking turns, so a swinging door
+  costs half), and both while a pipeline compiles (or the first bake
+  draws nothing). Anything new that changes what blocks a lamp
   must trigger a bake too. So there are three cameras: queries for the
   player's view take `With<MainCamera>`.
 - **Only a held flashlight shines**: `read_controls` clears `Controls::torch`
