@@ -1,14 +1,13 @@
 //! The crowbar in hand, a left click swings it, and a window right in
 //! front of the robber breaks: an opening with glass on the floor, which
-//! sight, walking and the guard's paths all take in, and a crash guards hear
-//! from far off.
+//! sight, walking and paths all take in, and a crash heard from far off.
 
 use crate::dev::Script;
-use crate::guard::Walkable;
 use crate::inventory::{Inventory, Kind};
 use crate::map::{Map, Wall, deco, tile_centre, tile_of};
 use crate::movement::TILE;
-use crate::player::{Level, LocalPlayer, Player, Swing};
+use crate::paths::Walkable;
+use crate::player::{Level, Living, Player, Swing};
 use crate::render::WorldMaterials;
 use crate::sight::Sight;
 use crate::sound::{Clip, Noise};
@@ -19,7 +18,7 @@ use bevy_replicon::prelude::ClientState;
 #[derive(Resource)]
 pub struct Bank(pub Map);
 
-/// How far off a guard hears a window go, in tiles.
+/// How far off a window going is heard, in tiles.
 const LOUD: f32 = 14.0;
 
 pub struct SmashPlugin;
@@ -50,7 +49,7 @@ fn window(map: &Map, pos: Vec2, heading: f32) -> Option<(i32, i32)> {
 fn smash(
     mouse: Res<ButtonInput<MouseButton>>,
     script: Res<Script>,
-    me: Single<(&Player, &Inventory, &mut Swing), With<LocalPlayer>>,
+    me: Single<(&Player, &Inventory, &mut Swing), Living>,
     mut bank: ResMut<Bank>,
     world_materials: Res<WorldMaterials>,
     mut images: ResMut<Assets<Image>>,

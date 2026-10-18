@@ -5,18 +5,26 @@
 //! - `BB_SCREENSHOT=path.png`: save the frame 30 before the end
 //! - `BB_KEYS="10:+W,40:-W,45:Roll"`: hold (+) or let go (-) of W A S D Shift
 //!   Up Down Left Right at those frames, or press `Roll`, `Torch`, `Crouch`,
-//!   `Inventory`, `Slot1`–`Slot4` or `Smash`, `Throw` or `Fire` (a left click), `Use` (E), `Reload` or `NewBank` (F5) once
+//!   `Inventory`, `Slot1`–`Slot4` or `Smash`, `Throw`, `Fire` or `SetTrap` (a left click), `Use` (E), `Reload`, `NewBank` (F5), `Talk` (T), `Say`, `Ready` (in the lobby), `Menu` (Esc) or `Leave` (back to the lobby) once
+//!   or `Key:ArrowUp` (`ArrowDown`, `ArrowLeft`, `ArrowRight`, `Enter`, `Tab`,
+//!   `Escape`, `Space`): a real key press, as the keyboard sends it
 //! - `BB_AIM=degrees`: aim there instead of at the pointer (0 east, 90 north)
 //! - `BB_ZOOM=scale`: world units a pixel to start at (else zoomed out all the way)
 //! - `BB_WINDOW=1400x900`: the window's size
 //! - `BB_SPAWN=x,y`: start on that tile
-//! - `BB_GUARD=x,y`: the guard starts on that tile (else in the security room)
+//! - `BB_WRAITH=x,y`: the wraith starts on that tile (else in its room)
+//! - `BB_NOTES=x,y`: the five notes in a row from that tile east (else about the bank)
+//! - `BB_LOBBY=1`: a smoke run stays in the lobby (else it is ready at once)
+//! - `BB_SAY=word`: what the `Say` key in `BB_KEYS` speaks to the wraith
+//! - `BB_SANITY=n`: every robber starts at n% sanity
 //! - `BB_UNPACED=1`: smoke frames as fast as they go, logging the average fps
 //! - `BB_PLAYERS=n`: n-1 more robbers by the spawn, flashlights on, walking in slow circles
 
 use crate::map::{Map, tile_centre};
 use crate::movement::TILE;
 use crate::player::Controls;
+use bevy::input::ButtonState;
+use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use std::collections::HashSet;
@@ -121,6 +129,9 @@ impl Plugin for DevPlugin {
             .add_systems(First, (count, play_script).chain())
             .add_systems(PreUpdate, bots)
             .add_systems(Last, smoke);
+        if crate::drawn(app) {
+            app.add_systems(First, typed.after(play_script));
+        }
         if smoke_frames().is_some() {
             app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
                 Duration::from_secs_f64(1.0 / 60.0),
@@ -144,6 +155,47 @@ fn play_script(frames: Res<Frames>, mut script: ResMut<Script>) {
         } else {
             s.pressed.insert(what.clone());
         }
+    }
+}
+
+/// `Key:Name` in the script: that key pressed for a frame, as the keyboard
+/// would, so menus and text boxes hear it too.
+fn typed(
+    script: Res<Script>,
+    window: Query<Entity, With<bevy::window::PrimaryWindow>>,
+    mut keys: MessageWriter<KeyboardInput>,
+    mut down: Local<Vec<(KeyCode, Key)>>,
+) {
+    let Ok(window) = window.single() else {
+        return;
+    };
+    let mut send = |key_code, logical_key, state| {
+        keys.write(KeyboardInput {
+            key_code,
+            logical_key,
+            state,
+            text: None,
+            repeat: false,
+            window,
+        });
+    };
+    for (code, key) in down.drain(..) {
+        send(code, key, ButtonState::Released);
+    }
+    for name in script.pressed.iter().filter_map(|p| p.strip_prefix("Key:")) {
+        let (code, key) = match name {
+            "ArrowUp" => (KeyCode::ArrowUp, Key::ArrowUp),
+            "ArrowDown" => (KeyCode::ArrowDown, Key::ArrowDown),
+            "ArrowLeft" => (KeyCode::ArrowLeft, Key::ArrowLeft),
+            "ArrowRight" => (KeyCode::ArrowRight, Key::ArrowRight),
+            "Enter" => (KeyCode::Enter, Key::Enter),
+            "Tab" => (KeyCode::Tab, Key::Tab),
+            "Escape" => (KeyCode::Escape, Key::Escape),
+            "Space" => (KeyCode::Space, Key::Space),
+            _ => continue,
+        };
+        send(code, key.clone(), ButtonState::Pressed);
+        down.push((code, key));
     }
 }
 

@@ -4,11 +4,10 @@
 //! sight and lamplight. The leaf is drawn as the robber last saw it: in the
 //! fog, nobody is seen opening doors.
 
-use crate::guard::Guard;
 use crate::map::{Door, DoorKind, Map, tile_centre};
 use crate::movement::{BODY_MARGIN, TILE};
 use crate::paint;
-use crate::player::{Controls, Level, LocalPlayer, Player, Reach};
+use crate::player::{Controls, Dead, Level, LocalPlayer, Player, Reach};
 use crate::render::{WorldMaterials, WorldPart, things_material};
 use crate::sight::Sight;
 use crate::sound::{Clip, Noise};
@@ -23,7 +22,10 @@ const REACH: f32 = BODY_MARGIN + 0.5 * TILE;
 const SENSOR: f32 = 1.6 * TILE;
 const OPENING: f32 = 0.15;
 const CLOSING: f32 = 0.4;
-/// How far off a guard hears the robber at a door, in tiles (crouched, not at all).
+/// Swung by the wraith: open this long with nobody there, then slammed in so long.
+const HAUNTED: f32 = 1.2;
+const SLAM: f32 = 0.12;
+/// How far off the robber at a door is heard, in tiles (crouched, not at all).
 const LOUD: f32 = 4.0;
 
 /// Per tile, as the doors texture holds it: how shut, lying along x, glass, 0.
@@ -56,6 +58,23 @@ pub struct Leaf {
     /// The robber who opened it, whose arm goes out to it.
     #[entities]
     robber: Option<Entity>,
+    /// Seconds the wraith holds it open, then (below 0) slams it.
+    #[serde(skip)]
+    haunted: f32,
+}
+
+impl Leaf {
+    pub fn centre(&self) -> Vec2 {
+        tile_centre(self.door.x, self.door.y)
+    }
+
+    pub fn is_shut(&self) -> bool {
+        self.open == 0.0
+    }
+
+    pub fn haunt(&mut self) {
+        self.haunted = HAUNTED;
+    }
 }
 
 pub struct DoorsPlugin;
@@ -74,9 +93,9 @@ impl Plugin for DoorsPlugin {
         if crate::drawn(app) {
             app.add_systems(
                 Update,
-                (upload, show)
-                    .after(to_shut)
-                    .run_if(resource_exists::<Shut>.and_then(resource_exists::<Sight>)),
+                (upload, show).after(to_shut).distributive_run_if(
+                    resource_exists::<Shut>.and_then(resource_exists::<Sight>),
+                ),
             );
         }
     }
@@ -94,6 +113,7 @@ pub fn spawn_doors(commands: &mut Commands, map: &Map) {
                 shown: 0.0,
                 side: 1.0,
                 robber: None,
+                haunted: 0.0,
             },
         ));
     }
@@ -127,16 +147,13 @@ fn near_side(d: Door, eye: Vec2) -> Vec2 {
 fn swing(
     time: Res<Time>,
     me: Option<Single<&Player, With<LocalPlayer>>>,
-    mut robbers: Query<(Entity, &Player, &mut Reach)>,
-    guards: Query<&Guard>,
+    mut robbers: Query<(Entity, &Player, &mut Reach), Without<Dead>>,
     mut leaves: Query<&mut Leaf>,
     mut noises: MessageWriter<Noise>,
 ) {
     let walkers: Vec<_> = robbers
         .iter()
-        .map(|(e, p, _)| (Some(e), &p.body))
-        .chain(guards.iter().map(|g| (None, &g.body)))
-        .map(|(e, b)| (e, b.pos, b.speed, b.is_crouching()))
+        .map(|(e, p, _)| (Some(e), p.body.pos, p.body.speed, p.body.is_crouching()))
         .collect();
     let dt = time.delta_secs();
     for mut leaf in &mut leaves {
@@ -153,13 +170,26 @@ fn swing(
             };
             near.then_some((robber, off, gap, speed))
         });
-        let near = opener.is_some();
+        let ghost = leaf.haunted > 0.0;
+        let slam = leaf.haunted < 0.0;
+        if leaf.haunted != 0.0 {
+            let h = leaf.haunted;
+            leaf.haunted = match h > 0.0 {
+                true if h > dt => h - dt,
+                true => -SLAM,
+                false => (h + dt).min(0.0),
+            };
+        }
+        let near = opener.is_some() || ghost;
         let was = leaf.open;
         if let Some((robber, off, _, _)) = opener
             && was == 0.0
         {
             leaf.side = if off.dot(d.across) > 0.0 { -1.0 } else { 1.0 };
             leaf.robber = robber;
+        } else if ghost && was == 0.0 {
+            // Nobody's arm goes out to it.
+            leaf.robber = None;
         }
         let (opens, shuts) = (near && was == 0.0, !near && was == 1.0);
         if by_hand
@@ -188,6 +218,8 @@ fn swing(
         // Coming at it fast, it is shoved open in time.
         let (goal, rate) = match opener {
             Some((_, _, gap, speed)) => (1.0, OPENING.min((gap / speed.max(1.0)).max(0.05))),
+            None if ghost => (1.0, OPENING),
+            None if slam => (0.0, SLAM),
             None => (0.0, CLOSING),
         };
         // Untouched unless it moves: a changed leaf is sent to every player.

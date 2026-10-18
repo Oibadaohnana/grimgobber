@@ -1,22 +1,28 @@
+mod crew;
 mod dev;
 mod doors;
-mod guard;
 mod guns;
 mod hearing;
 mod inventory;
 mod inventory_ui;
 mod map;
+mod menu;
 mod movement;
 mod net;
 mod paint;
+mod paths;
 mod player;
 mod prompt;
 mod render;
 mod rng;
+mod sanity;
 mod sight;
 mod smash;
 mod sound;
+mod talk;
 mod throw;
+mod trap;
+mod wraith;
 
 use bevy::app::ScheduleRunnerPlugin;
 use bevy::camera::Hdr;
@@ -33,8 +39,9 @@ use std::time::Duration;
 use crate::player::{Controls, Level, LocalPlayer, Player, PlayerPlugin, spawn_robber};
 use crate::render::{MainCamera, RenderPlugin, WorldMaterial, WorldMaterials, WorldPart};
 
+/// The bank to build next, set by the rounds (crew.rs), F5, or the server's seed.
 #[derive(Resource)]
-struct NewMap(Option<u64>);
+pub struct NewMap(pub Option<u64>);
 
 #[derive(Resource)]
 struct Current {
@@ -49,7 +56,7 @@ struct Hud;
 
 /// A headless server: nobody plays on it, nothing is drawn.
 #[derive(Resource)]
-struct Headless;
+pub struct Headless;
 
 /// Whether this app draws what it runs, which a server does not.
 pub fn drawn(app: &App) -> bool {
@@ -93,6 +100,8 @@ fn main() {
             sound::SoundPlugin,
             hearing::HearingPlugin,
             inventory_ui::InventoryUiPlugin,
+            talk::TalkPlugin,
+            menu::MenuPlugin,
             smash::SmashPlugin,
             throw::ThrowPlugin,
             prompt::PromptPlugin,
@@ -108,8 +117,10 @@ fn main() {
                 (
                     draw_map.run_if(resource_exists_and_changed::<Current>),
                     player::dress,
-                    guard::dress,
                     doors::dress,
+                    wraith::dress,
+                    wraith::dress_notes,
+                    trap::dress,
                     hud,
                 )
                     .chain()
@@ -117,21 +128,20 @@ fn main() {
             ),
         );
     }
-    // A client waits for the server's seed.
-    let first = match role {
-        net::Role::Client(_) => None,
-        _ => Some(seed),
-    };
     app.add_message::<sound::Noise>()
         .add_plugins((
             net::NetPlugin,
             PlayerPlugin,
             doors::DoorsPlugin,
-            guard::GuardPlugin,
+            wraith::WraithPlugin,
+            sanity::SanityPlugin,
+            trap::TrapPlugin,
+            crew::CrewPlugin,
             dev::DevPlugin,
         ))
-        .insert_resource(NewMap(first))
-        .add_systems(Update, (served, build_map).chain())
+        .insert_resource(NewMap(None))
+        .insert_resource(crew::NextSeed(seed))
+        .add_systems(Update, (served, clear, build_map).chain())
         .run();
 }
 
@@ -213,13 +223,36 @@ fn served(seeds: Query<&net::Seed, (Added<net::Seed>, With<Remote>)>, mut new_ma
     }
 }
 
-/// Who is in it comes from the server when playing on one.
+/// The round over (its seed gone), what was built for it goes too.
+fn clear(
+    current: Option<Res<Current>>,
+    seeds: Query<(), With<net::Seed>>,
+    new_map: Res<NewMap>,
+    parts: Query<Entity, With<WorldPart>>,
+    mut commands: Commands,
+) {
+    if current.is_none() || !seeds.is_empty() || new_map.0.is_some() {
+        return;
+    }
+    for e in &parts {
+        commands.entity(e).despawn();
+    }
+    commands.remove_resource::<Current>();
+    commands.remove_resource::<Level>();
+    commands.remove_resource::<sight::Sight>();
+    commands.remove_resource::<doors::Shut>();
+    commands.remove_resource::<smash::Bank>();
+    commands.remove_resource::<paths::Walkable>();
+}
+
+/// A robber for each crewmate, in his look; who is in it comes from the
+/// server when playing on one.
 fn build_map(
     mut commands: Commands,
     mut new_map: ResMut<NewMap>,
-    headless: Option<Res<Headless>>,
     joined: Option<Res<net::Joined>>,
     old: Query<Entity, With<WorldPart>>,
+    mut crew: Query<(&mut crew::Crewmate, &crew::Look)>,
 ) {
     let Some(seed) = new_map.0.take() else {
         return;
@@ -234,13 +267,23 @@ fn build_map(
     if joined.is_none() {
         commands.spawn((WorldPart, Replicated, net::Seed(seed)));
         doors::spawn_doors(&mut commands, &map);
-        guard::spawn_guard(&mut commands, &map);
+        commands.insert_resource(paths::Walkable::new(&map));
+        wraith::spawn_wraith(&mut commands, &map, seed);
         let spawn = dev::tile("BB_SPAWN").unwrap_or(map.spawn);
-        if headless.is_none() {
-            spawn_robber(&mut commands, spawn, true);
+        let starts = crew::starts(&map, spawn, crew.iter().count());
+        for ((mut mate, look), at) in crew.iter_mut().zip(starts) {
+            let robber = spawn_robber(&mut commands, at, look.clone());
+            commands.entity(robber).insert(net::Owner(mate.id));
+            mate.ready = false;
+            mate.in_round = true;
         }
         for (i, at) in dev::crew(&map, spawn).into_iter().enumerate() {
-            let bot = spawn_robber(&mut commands, at, false);
+            let look = crew::Look {
+                name: format!("Bot {}", i + 1),
+                colour: i + 1,
+                outfit: crew::Outfit::ALL[i % 4],
+            };
+            let bot = spawn_robber(&mut commands, at, look);
             commands.entity(bot).insert(dev::Bot(i as f32 * 1.7));
         }
     }
@@ -277,11 +320,12 @@ fn draw_map(
 }
 
 type Me<'a> = (
-    Entity,
     &'a Player,
     &'a Controls,
     &'a guns::Gunplay,
     &'a inventory::Inventory,
+    &'a sanity::Sanity,
+    Has<player::Dead>,
 );
 
 #[allow(clippy::too_many_arguments)]
@@ -289,17 +333,14 @@ fn hud(
     current: Option<Res<Current>>,
     level: Option<Res<Level>>,
     me: Single<Me, With<LocalPlayer>>,
-    guards: Query<&guard::Guard>,
-    order: Res<guard::Order>,
-    heard: Res<guard::Heard>,
+    wraiths: Query<&wraith::Wraith>,
     diagnostics: Res<DiagnosticsStore>,
     mut text: Query<&mut Text, With<Hud>>,
 ) {
     let (Some(current), Some(level), Ok(mut text)) = (current, level, text.single_mut()) else {
         return;
     };
-    let (me, player, controls, gun, inventory) = *me;
-    let spotted = guards.iter().any(|g| g.watching(me));
+    let (player, controls, gun, inventory, sanity, dead) = *me;
     let fps = diagnostics
         .get(&FrameTimeDiagnosticsPlugin::FPS)
         .and_then(|d| d.smoothed())
@@ -321,16 +362,26 @@ fn hud(
         "standing"
     };
     let torch = if controls.torch { "on" } else { "off" };
+    let mind = if dead {
+        "DEAD: you walk on unseen".to_string()
+    } else {
+        format!("sanity {:.0}%", sanity.0)
+    };
+    // What the crew has of the wraith: the letters found, then its name.
+    let hunt = wraiths.iter().next().map_or(String::new(), |w| {
+        let mut letters: Vec<String> = w.letters.iter().map(char::to_string).collect();
+        letters.resize(wraith::NAME_LEN, "_".into());
+        match (w.caught, w.named, w.letters.len() >= wraith::NAME_LEN) {
+            (true, ..) => "CAUGHT IT: the round is won (F5 for a new bank)".into(),
+            (_, true, _) => "its name is spoken: lure it over a trap".into(),
+            (_, _, true) => format!("letters {}: T to speak its name", letters.join(" ")),
+            _ => format!("letters {}", letters.join(" ")),
+        }
+    });
     let roll = if b.roll_cooling() > 0.0 {
         "cooling"
     } else {
         "ready"
-    };
-    let guard = match (order.0, spotted) {
-        (true, _) => "   click where the guard goes",
-        (_, true) => "   THE GUARD SEES YOU",
-        _ if heard.0 => "   the guard heard something",
-        _ => "",
     };
     let pistol = match inventory.held().map(|i| &inventory.items[i]) {
         Some(p) if p.kind == inventory::Kind::Pistol => {
@@ -348,8 +399,9 @@ fn hud(
     text.0 = format!(
         "BANK BOBBERY   bank #{}  ({} rooms, {} props, {} lamps)   {:.0} fps\n\
          WASD walk | mouse aim | Shift sprint | C crouch | Space/Alt roll | F flashlight | Tab inventory | 1-4 quick slots\n\
-         E knock out from behind | T then click send the guard | R reload | wheel zoom | F5 new bank | F11 full screen\n\
-         health {}/3   {state}   roll {roll}   flashlight {torch}{pistol}{guard}",
-        current.seed, current.rooms, current.props, current.lamps, fps, gun.health
+         E pick up | T speak | R reload | wheel zoom | Esc menu | F11 full screen\n\
+         {mind}   {state}   roll {roll}   flashlight {torch}{pistol}\n\
+         {hunt}",
+        current.seed, current.rooms, current.props, current.lamps, fps
     );
 }

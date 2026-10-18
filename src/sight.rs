@@ -262,7 +262,7 @@ mod tests {
         let map = crate::map::generate(6);
         let sight = Sight::new(&map);
         // A car with nothing else in the way: seen over standing, hidden crouched.
-        let (robber, guard) = map
+        let (robber, watcher) = map
             .props
             .iter()
             .filter(|p| p.kind == crate::map::PropKind::Car)
@@ -271,9 +271,9 @@ mod tests {
                 let robber = vec2(car.centre().x, car.max.y + 24.0);
                 (robber, vec2(car.centre().x, car.min.y - 4.0 * TILE))
             })
-            .find(|&(robber, guard)| sight.seen(robber, guard, 12.0, false, &[]) > 0.5)
+            .find(|&(robber, watcher)| sight.seen(robber, watcher, 12.0, false, &[]) > 0.5)
             .expect("a car to look over");
-        assert!(sight.seen(robber, guard, 12.0, true, &[]) < 0.5);
+        assert!(sight.seen(robber, watcher, 12.0, true, &[]) < 0.5);
     }
 
     #[test]

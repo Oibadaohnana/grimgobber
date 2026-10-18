@@ -1,5 +1,5 @@
+use crate::crew::Look;
 use crate::dev::Script;
-use crate::guard::Guard;
 use crate::guns::Gunplay;
 use crate::inventory::{Inventory, Kind};
 use crate::map::Map;
@@ -11,6 +11,8 @@ use crate::paint;
 use crate::render::{
     MainCamera, WorldMaterial, WorldMaterials, WorldPart, things_material, write_params,
 };
+use crate::sanity::Sanity;
+use crate::wraith::{Wraith, flicker_level};
 use bevy::ecs::query::QueryItem;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
@@ -20,13 +22,20 @@ use serde::{Deserialize, Serialize};
 use std::f32::consts::{PI, TAU};
 
 #[derive(Component, Serialize, Deserialize)]
-#[require(Controls, Inventory, Reach, Swing, Gunplay)]
+#[require(Controls, Inventory, Reach, Swing, Gunplay, Sanity)]
 pub struct Player {
     pub body: Body,
 }
 
 #[derive(Component)]
 pub struct LocalPlayer;
+
+/// Caught by the wraith: he walks on unseen, a ghost, and touches nothing.
+#[derive(Component, Serialize, Deserialize)]
+pub struct Dead;
+
+/// The robber this machine plays, while he lives.
+pub type Living = (With<LocalPlayer>, Without<Dead>);
 
 #[derive(Resource)]
 pub struct Level {
@@ -151,26 +160,23 @@ impl Plugin for PlayerPlugin {
         app.insert_resource(Time::<Fixed>::from_seconds(STEP as f64))
             .add_systems(FixedUpdate, step.run_if(resource_exists::<Level>));
         if crate::drawn(app) {
-            app.add_systems(PreUpdate, read_controls.after(bevy::input::InputSystems))
+            app.add_systems(PreUpdate, read_controls.after(crate::talk::talk))
                 .add_systems(Update, (show, animate, follow, zoom).chain());
         }
     }
 }
 
-pub fn spawn_robber(commands: &mut Commands, at: Vec2, local: bool) -> Entity {
-    let robber = commands
+pub fn spawn_robber(commands: &mut Commands, at: Vec2, look: Look) -> Entity {
+    commands
         .spawn((
             WorldPart,
             Player {
                 body: Body::new(at, std::f32::consts::FRAC_PI_2),
             },
+            look,
             Replicated,
         ))
-        .id();
-    if local {
-        commands.entity(robber).insert(LocalPlayer);
-    }
-    robber
+        .id()
 }
 
 /// His picture, fading unless he is the one looking.
@@ -178,11 +184,11 @@ pub fn dress(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     world_materials: Res<WorldMaterials>,
-    robbers: Query<(Entity, &Player, Has<LocalPlayer>), Added<Player>>,
+    robbers: Query<(Entity, &Player, &Look, Has<LocalPlayer>), Added<Player>>,
 ) {
-    for (robber, player, local) in &robbers {
+    for (robber, player, look, local) in &robbers {
         let at = player.body.pos;
-        let p = paint::robber(!local);
+        let p = paint::robber(!local, look);
         let [foot, knee, arm, glove, crowbar, torch, lens, streak] = [
             p.foot, p.knee, p.arm, p.glove, p.crowbar, p.torch, p.lens, p.streak,
         ]
@@ -310,9 +316,9 @@ fn read_controls(
     script: Res<Script>,
     window: Query<&Window, With<PrimaryWindow>>,
     camera: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
-    me: Single<(&Shown, &Inventory, &mut Controls), With<LocalPlayer>>,
+    me: Single<(&Shown, &Inventory, &mut Controls, Has<Dead>), With<LocalPlayer>>,
 ) {
-    let (shown, inventory, mut controls) = me.into_inner();
+    let (shown, inventory, mut controls, dead) = me.into_inner();
     let held = |k: KeyCode, name: &str| keys.pressed(k) || script.held(name);
     let mut d = Vec2::ZERO;
     if held(KeyCode::KeyW, "W") || held(KeyCode::ArrowUp, "Up") {
@@ -345,8 +351,8 @@ fn read_controls(
     if keys.just_pressed(KeyCode::KeyF) || script.pressed("Torch") {
         controls.torch = !controls.torch;
     }
-    // Only a flashlight in his hand shines; put away, it goes off.
-    controls.torch &= inventory.holds(Kind::Flashlight);
+    // Only a flashlight in his hand shines; put away, it goes off. The dead's never.
+    controls.torch &= inventory.holds(Kind::Flashlight) && !dead;
     // The pointer is the inventory's while it is open.
     if inventory.open {
         return;
@@ -635,9 +641,9 @@ fn pose(
 fn follow(
     me: Single<(Entity, &Shown, &Player, &Controls), With<LocalPlayer>>,
     robbers: Query<(Entity, &Shown, &Player, &Controls)>,
-    guards: Query<&Guard>,
-    time: Res<Time<Fixed>>,
     mut camera: Query<&mut Transform, (With<MainCamera>, Without<Player>)>,
+    wraiths: Query<&Wraith>,
+    time: Res<Time>,
     world_materials: Res<WorldMaterials>,
     mut materials: ResMut<Assets<WorldMaterial>>,
 ) {
@@ -663,10 +669,13 @@ fn follow(
         player.body.heading,
         controls.torch,
         player.body.is_crouching(),
-        guards
+        wraiths
             .iter()
-            .next()
-            .map_or(Vec4::ZERO, |g| g.view(time.overstep_fraction())),
+            .find_map(|w| w.flicker)
+            .map_or(Vec4::ZERO, |(at, reach)| {
+                at.extend(reach * TILE)
+                    .extend(flicker_level(time.elapsed_secs()))
+            }),
         &torches,
         &world_materials,
         &mut materials,

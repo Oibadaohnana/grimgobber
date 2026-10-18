@@ -15,6 +15,8 @@ pub enum Kind {
     /// Its `count` is the rounds in its magazine.
     Pistol,
     Rounds,
+    /// For the wraith: set on the floor, it takes it once its name is spoken.
+    Trap,
 }
 
 impl Kind {
@@ -26,6 +28,7 @@ impl Kind {
             Kind::Coin => "Coins",
             Kind::Pistol => "Pistol",
             Kind::Rounds => "Pistol rounds",
+            Kind::Trap => "Ghost trap",
         }
     }
 
@@ -45,6 +48,7 @@ impl Kind {
             Kind::Crowbar => ivec2(4, 1),
             Kind::Flashlight | Kind::Pistol => ivec2(2, 1),
             Kind::Lockpicks | Kind::Coin | Kind::Rounds => ivec2(1, 1),
+            Kind::Trap => ivec2(2, 2),
         }
     }
 }
@@ -112,8 +116,9 @@ impl Default for Inventory {
                     count: 16,
                     ..item(Kind::Rounds, At::Grid(ivec2(4, 1)))
                 },
+                item(Kind::Trap, At::Grid(ivec2(6, 2))),
             ],
-            quick: [Some(1), Some(0), Some(4), Some(3)],
+            quick: [Some(1), Some(0), Some(6), Some(3)],
             open: false,
         }
     }
@@ -275,7 +280,7 @@ mod tests {
         }
         assert_eq!((inv.held(), inv.quick[3]), (None, None));
         assert_eq!(inv.quick[0].map(|i| inv.items[i].kind), Some(Kind::Crowbar));
-        // Taken from a guard: coins onto the stack, a new thing where it goes.
+        // Added: coins onto the stack, a new thing where it goes.
         let mut inv = Inventory::default();
         assert!(inv.add(Kind::Coin, 2, None));
         assert_eq!(inv.items[3].count, 5);

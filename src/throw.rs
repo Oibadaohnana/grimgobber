@@ -1,14 +1,13 @@
 //! Coins: in hand, a left click throws one at the pointer, up to `THROW`
 //! tiles, stopping short of anything solid in the way. Landing, it plings,
-//! guards `LOUD` tiles off hear it and go to look, and it lies on the floor
-//! till one of them pockets it, or the robber picks it up again (E).
+//! heard `LOUD` tiles off, and it lies on the floor till the robber picks it
+//! up again (E).
 
 use crate::dev::Script;
-use crate::guard::Guard;
 use crate::inventory::{Inventory, Kind};
 use crate::movement::{Solids, TILE};
 use crate::paint;
-use crate::player::{Level, LocalPlayer, Player, Shown, Swing};
+use crate::player::{Level, Living, Player, Shown, Swing};
 use crate::render::{MainCamera, WorldMaterials, WorldPart, things_material};
 use crate::sound::{Clip, Noise};
 use bevy::prelude::*;
@@ -21,9 +20,7 @@ const LOUD: f32 = 7.0;
 /// Tiles a second through the air, and the shortest flight.
 const SPEED: f32 = 10.0;
 const QUICKEST: f32 = 0.2;
-/// A guard this close to a coin on the floor picks it up; the robber, this
-/// close, can.
-const PICK: f32 = 0.7 * TILE;
+/// The robber this close to a coin on the floor can pick it up.
 const REACH: f32 = 0.8 * TILE;
 
 #[derive(Component)]
@@ -54,9 +51,9 @@ impl Plugin for ThrowPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, spawn).add_systems(
             Update,
-            (aim, throw, fly, pick_up, collect.after(crate::guard::knock))
-                .chain()
-                .run_if(resource_exists::<Level>.and_then(in_state(ClientState::Disconnected))),
+            (aim, throw, fly, collect).chain().distributive_run_if(
+                resource_exists::<Level>.and_then(in_state(ClientState::Disconnected)),
+            ),
         );
     }
 }
@@ -95,7 +92,7 @@ fn pointer(
 
 /// Coins in hand, the ring round him and the spot under the pointer.
 fn aim(
-    me: Single<(&Inventory, &Player, &Shown), With<LocalPlayer>>,
+    me: Single<(&Inventory, &Player, &Shown), Living>,
     level: Res<Level>,
     window: Query<&Window, With<PrimaryWindow>>,
     camera: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
@@ -143,7 +140,7 @@ fn throw(
     script: Res<Script>,
     window: Query<&Window, With<PrimaryWindow>>,
     camera: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
-    me: Single<(&Player, &mut Inventory, &mut Swing), With<LocalPlayer>>,
+    me: Single<(&Player, &mut Inventory, &mut Swing), Living>,
     level: Res<Level>,
     coin: Res<CoinMesh>,
     world_materials: Res<WorldMaterials>,
@@ -206,28 +203,11 @@ fn fly(
     }
 }
 
-fn pick_up(
-    coins: Query<(Entity, &Transform), With<Dropped>>,
-    mut guards: Query<&mut Guard>,
-    mut commands: Commands,
-) {
-    for (e, t) in &coins {
-        let at = t.translation.truncate();
-        if let Some(mut g) = guards
-            .iter_mut()
-            .find(|g| g.awake() && g.body.pos.distance(at) < PICK)
-        {
-            g.pocket(Kind::Coin, 1);
-            commands.entity(e).despawn();
-        }
-    }
-}
-
 /// The coin within his reach, if nothing else wants E: E picks it up.
 fn collect(
     keys: Res<ButtonInput<KeyCode>>,
     script: Res<Script>,
-    me: Single<(&Player, &mut Inventory), With<LocalPlayer>>,
+    me: Single<(&Player, &mut Inventory), Living>,
     coins: Query<(Entity, &Transform), With<Dropped>>,
     mut prompt: ResMut<crate::prompt::Prompt>,
     mut commands: Commands,

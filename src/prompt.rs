@@ -1,5 +1,5 @@
 //! The "E ..." prompt: whatever the robber could do with E now offers itself
-//! each frame (the first to, after the knockout, has it), and the prompt
+//! each frame (the first to has it), and the prompt
 //! shows over where it says.
 
 use crate::render::MainCamera;

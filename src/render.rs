@@ -104,7 +104,7 @@ pub struct Params {
     pub eye: Vec4,
     pub map: Vec4,
     pub misc: Vec4,
-    pub guard: Vec4,
+    pub flicker: Vec4,
     pub torches: [Vec4; MAX_TORCHES],
     pub lights: [Vec4; 2 * MAX_LIGHTS],
 }
@@ -248,7 +248,7 @@ pub fn spawn_map(
                 eye: vec4(map.spawn.x, map.spawn.y, 1.0, 0.0),
                 map: vec4(map.w as f32, map.h as f32, TILE, 0.0),
                 misc: vec4(mode, lamps, 0.0, 0.0),
-                guard: Vec4::ZERO,
+                flicker: Vec4::ZERO,
                 torches: [Vec4::ZERO; MAX_TORCHES],
                 lights,
             },
@@ -348,7 +348,7 @@ pub fn ghost_material(world_materials: &WorldMaterials) -> Handle<WorldMaterial>
     world_materials.all[2].clone()
 }
 
-/// `guard`: his eye and the way he faces (cos, sin); zero for none.
+/// `flicker`: lights flickering, centre, reach and how bright now (none: zero).
 /// `torches`: every flashlight on, the same way, the robber's own first.
 #[allow(clippy::too_many_arguments)]
 pub fn write_params(
@@ -356,7 +356,7 @@ pub fn write_params(
     heading: f32,
     torch: bool,
     crouch: bool,
-    guard: Vec4,
+    flicker: Vec4,
     torches: &[Vec4],
     world_materials: &WorldMaterials,
     materials: &mut Assets<WorldMaterial>,
@@ -369,8 +369,8 @@ pub fn write_params(
         p.eye = vec4(eye.x, eye.y, heading.cos(), heading.sin());
         p.misc.z = if torch { 1.0 } else { 0.0 };
         p.misc.w = if crouch { 1.0 } else { 0.0 };
-        p.guard = guard;
         p.map.w = torches.len().min(MAX_TORCHES) as f32;
+        p.flicker = flicker;
         for (t, &at) in p.torches.iter_mut().zip(torches) {
             *t = at;
         }

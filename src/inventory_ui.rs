@@ -1,24 +1,19 @@
 //! The inventory screen (Tab): the hands and the inventory's grid, items
-//! dragged between them (R turns the one held), the quick slots along the
-//! bottom, always shown, and, next to a guard knocked out, his pockets
-//! ("vicinity") to take from and put into. Painted as one mesh fixed to the camera, in
-//! logical pixels from the window's middle, `y` up; the words are UI text.
+//! dragged between them (R turns the one held), and the quick slots along the
+//! bottom, always shown. Painted as one mesh fixed to the camera, in logical
+//! pixels from the window's middle, `y` up; the words are UI text.
 
 use crate::dev::Script;
-use crate::guard::Guard;
 use crate::inventory::{At, GRID, Inventory, Item, Kind, size_of};
 use crate::paint::{self, Frame, Hex, Painter, hex};
-use crate::player::{LocalPlayer, Player};
+use crate::player::LocalPlayer;
 use crate::render::MainCamera;
-use bevy::input::InputSystems;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
 const CELL: f32 = 46.0;
 const HEAD: f32 = 24.0;
 const SLOT: f32 = 60.0;
-/// A guard knocked out this close shows his pockets.
-const NEAR: f32 = 1.6 * crate::movement::TILE;
 
 #[derive(Component)]
 struct Screen;
@@ -26,12 +21,10 @@ struct Screen;
 #[derive(Component)]
 struct Words;
 
-/// The item being dragged (one of his, or from the pockets if `near`),
-/// which way it lies, and where on it the pointer took it.
+/// The item being dragged, which way it lies, and where on it the pointer took it.
 #[derive(Resource, Default)]
 struct Drag {
     id: Option<usize>,
-    near: bool,
     turned: bool,
     grab: Vec2,
 }
@@ -42,7 +35,7 @@ impl Plugin for InventoryUiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Drag>()
             .add_systems(PostStartup, spawn)
-            .add_systems(PreUpdate, input.after(InputSystems))
+            .add_systems(PreUpdate, input.after(crate::talk::talk))
             .add_systems(Update, draw);
     }
 }
@@ -52,16 +45,12 @@ struct Layout {
     /// The grid's top-left corner.
     grid: Vec2,
     quick: [Rect; 4],
-    /// The pockets of a guard close by.
-    near: Rect,
 }
 
 fn layout(win: Vec2) -> Layout {
     let top = 250.0 - HEAD;
-    let near = top - 2.0 * CELL - 110.0;
     Layout {
         hands: Rect::new(-340.0, top - 2.0 * CELL, -340.0 + 4.0 * CELL, top),
-        near: Rect::new(-340.0, near - 2.0 * CELL, -340.0 + 4.0 * CELL, near),
         grid: vec2(40.0, top),
         quick: std::array::from_fn(|i| {
             let x = (i as f32 - 2.0) * (SLOT + 8.0) + 4.0;
@@ -87,43 +76,14 @@ fn rect_of(lay: &Layout, item: &Item) -> Rect {
     }
 }
 
-/// Where the pockets' things lie: left to right, row on row.
-fn near_rects(lay: &Layout, pockets: &[(Kind, u32)]) -> Vec<Rect> {
-    let mut at = vec2(lay.near.min.x, lay.near.max.y);
-    pockets
-        .iter()
-        .map(|&(kind, _)| {
-            let size = kind.size().as_vec2() * CELL;
-            if at.x + size.x > lay.near.max.x + 1.0 {
-                at = vec2(lay.near.min.x, at.y - CELL);
-            }
-            let r = Rect::new(at.x, at.y - size.y, at.x + size.x, at.y);
-            at.x += size.x;
-            r
-        })
-        .collect()
-}
-
-/// The guard knocked out close enough to go through his pockets.
-fn near_guard<'a>(pos: Vec2, guards: impl Iterator<Item = (Entity, &'a Guard)>) -> Option<Entity> {
-    guards
-        .filter(|(_, g)| !g.awake() && g.body.pos.distance(pos) < NEAR)
-        .map(|(e, _)| e)
-        .next()
-}
-
 enum Drop {
     At(At),
     Quick(usize),
-    Near,
 }
 
 /// What letting go of the dragged item at `p` would do: its top-left, at
 /// `p - grab`, snapped to the cell under it.
-fn drop_at(lay: &Layout, drag: &Drag, p: Vec2, near: bool) -> Option<Drop> {
-    if near && lay.near.contains(p) {
-        return Some(Drop::Near);
-    }
+fn drop_at(lay: &Layout, drag: &Drag, p: Vec2) -> Option<Drop> {
     if lay.hands.contains(p) {
         return Some(Drop::At(At::Hands));
     }
@@ -184,17 +144,14 @@ fn spawn(
     ));
 }
 
-#[allow(clippy::too_many_arguments)]
 fn input(
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     script: Res<Script>,
     window: Query<&Window, With<PrimaryWindow>>,
-    me: Single<(&Player, &mut Inventory), With<LocalPlayer>>,
-    mut guards: Query<(Entity, &mut Guard)>,
+    mut inv: Single<&mut Inventory, With<LocalPlayer>>,
     mut drag: ResMut<Drag>,
 ) {
-    let (player, mut inv) = me.into_inner();
     if keys.just_pressed(KeyCode::Tab) || script.pressed("Inventory") {
         inv.open = !inv.open;
     }
@@ -223,87 +180,30 @@ fn input(
         return;
     };
     let lay = layout(vec2(window.width(), window.height()));
-    let near = near_guard(player.body.pos, guards.iter());
-    let mut pockets = near.and_then(|e| guards.get_mut(e).ok()).map(|(_, g)| g);
-    let in_pockets = |pockets: &Option<Mut<Guard>>| {
-        let pockets = pockets.as_ref().map_or(&[][..], |g| &g.pockets[..]);
-        near_rects(&lay, pockets).iter().position(|r| r.contains(p))
-    };
-    let ctrl = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
     let mine = (0..inv.items.len()).find(|&i| rect_of(&lay, &inv.items[i]).contains(p));
-    // Ctrl and a click: across at once, his into the pockets, theirs into his.
-    if ctrl && mouse.just_pressed(MouseButton::Left) {
-        if let (Some(id), Some(g)) = (mine, pockets.as_mut()) {
-            let item = inv.remove(id);
-            g.pocket(item.kind, item.count);
-        } else if let Some(i) = in_pockets(&pockets)
-            && let Some(g) = pockets.as_mut()
-            && inv.add(g.pockets[i].0, g.pockets[i].1, None)
-        {
-            g.pockets.remove(i);
-        }
-    } else if mouse.just_pressed(MouseButton::Left) {
-        if let Some(id) = mine {
-            let r = rect_of(&lay, &inv.items[id]);
-            *drag = Drag {
-                id: Some(id),
-                near: false,
-                turned: inv.items[id].turned,
-                grab: p - vec2(r.min.x, r.max.y),
-            };
-        } else if let Some(i) = in_pockets(&pockets) {
-            let pocket = pockets.as_ref().map_or(&[][..], |g| &g.pockets[..]);
-            let r = near_rects(&lay, pocket)[i];
-            *drag = Drag {
-                id: Some(i),
-                near: true,
-                turned: false,
-                grab: p - vec2(r.min.x, r.max.y),
-            };
-        }
-    }
-    // A right click takes a thing from his pockets.
-    if mouse.just_pressed(MouseButton::Right)
-        && let Some(i) = in_pockets(&pockets)
-        && let Some(g) = pockets.as_mut()
-        && inv.add(g.pockets[i].0, g.pockets[i].1, None)
+    if mouse.just_pressed(MouseButton::Left)
+        && let Some(id) = mine
     {
-        g.pockets.remove(i);
+        let r = rect_of(&lay, &inv.items[id]);
+        *drag = Drag {
+            id: Some(id),
+            turned: inv.items[id].turned,
+            grab: p - vec2(r.min.x, r.max.y),
+        };
     }
     if let Some(id) = drag.id {
-        let kind = match (&pockets, drag.near) {
-            (Some(g), true) => g.pockets.get(id).map(|p| p.0),
-            (_, true) => None,
-            _ => Some(inv.items[id].kind),
-        };
-        if keys.just_pressed(KeyCode::KeyR)
-            && let Some(kind) = kind
-        {
+        if keys.just_pressed(KeyCode::KeyR) {
             drag.turned = !drag.turned;
-            drag.grab = size_of(kind, drag.turned).as_vec2() * CELL * vec2(0.5, -0.5);
+            let size = size_of(inv.items[id].kind, drag.turned);
+            drag.grab = size.as_vec2() * CELL * vec2(0.5, -0.5);
         }
         if mouse.just_released(MouseButton::Left) {
-            match (
-                drop_at(&lay, &drag, p, pockets.is_some()),
-                drag.near,
-                pockets.as_mut(),
-            ) {
-                // Out of his pockets into his own things, and back.
-                (Some(Drop::At(at)), true, Some(g)) if id < g.pockets.len() => {
-                    let (kind, n) = g.pockets[id];
-                    if inv.add(kind, n, Some(at)) {
-                        g.pockets.remove(id);
-                    }
-                }
-                (Some(Drop::Near), false, Some(g)) => {
-                    let item = inv.remove(id);
-                    g.pocket(item.kind, item.count);
-                }
-                (Some(Drop::At(at)), false, _) => {
+            match drop_at(&lay, &drag, p) {
+                Some(Drop::At(at)) => {
                     inv.put(id, drag.turned, at);
                 }
-                (Some(Drop::Quick(i)), false, _) => inv.quick[i] = Some(id),
-                _ => {}
+                Some(Drop::Quick(i)) => inv.quick[i] = Some(id),
+                None => {}
             }
             drag.id = None;
         }
@@ -350,9 +250,8 @@ fn picture(g: &mut Painter, kind: Kind, turned: bool, r: Rect) {
 #[allow(clippy::too_many_arguments)]
 fn draw(
     mut commands: Commands,
-    me: Single<(&Player, &Inventory), With<LocalPlayer>>,
+    inv: Single<&Inventory, With<LocalPlayer>>,
     drag: Res<Drag>,
-    guards: Query<(Entity, &Guard)>,
     window: Query<&Window, With<PrimaryWindow>>,
     projection: Query<&Projection, With<MainCamera>>,
     mut screen: Query<(&Mesh2d, &mut Transform), With<Screen>>,
@@ -367,23 +266,11 @@ fn draw(
     if let Ok(Projection::Orthographic(o)) = projection.single() {
         t.scale = Vec3::splat(o.scale);
     }
-    let (player, inv) = *me;
+    let inv = *inv;
     let win = vec2(window.width(), window.height());
     let lay = layout(win);
     let p = pointer(window);
-    let guard = near_guard(player.body.pos, guards.iter());
-    let pockets: &[(Kind, u32)] = guard
-        .and_then(|e| guards.get(e).ok())
-        .map_or(&[], |(_, g)| &g.pockets);
-    let near = guard.is_some();
-    // What is being dragged: one of his, or from the pockets.
-    let dragged = drag.id.and_then(|id| {
-        if drag.near {
-            pockets.get(id).map(|&(kind, n)| (kind, n))
-        } else {
-            inv.items.get(id).map(|i| (i.kind, i.count))
-        }
-    });
+    let dragged = drag.id.and_then(|id| inv.items.get(id)).map(|i| i.kind);
     let mut g = Painter::default();
     let mut text: Vec<(Vec2, String, f32, Hex)> = Vec::new();
 
@@ -419,40 +306,11 @@ fn draw(
                 boxed(&mut g, r, hex(0x24282d), HOLE, 0.95);
             }
         }
-        if near {
-            panel(&mut g, "VICINITY  GUARD, OUT COLD".into(), lay.near);
-            boxed(&mut g, lay.near, LINE, HOLE, 0.9);
-            if pockets.is_empty() {
-                text.push((
-                    lay.near.min + vec2(8.0, CELL + 8.0),
-                    "His pockets are empty".into(),
-                    12.0,
-                    hex(0x9aa0a6),
-                ));
-            }
-            for (i, (r, &(kind, n))) in near_rects(&lay, pockets).iter().zip(pockets).enumerate() {
-                if drag.near && drag.id == Some(i) {
-                    continue;
-                }
-                let inner =
-                    Rect::from_center_half_size(r.center(), r.half_size() - Vec2::splat(2.0));
-                boxed(&mut g, inner, LINE, TILE, 0.9);
-                picture(&mut g, kind, false, *r);
-                if n > 1 {
-                    text.push((count_at(*r), format!("x{n}"), 12.0, hex(0xf0ead8)));
-                }
-            }
-        }
         // Where the dragged item would land, green or red.
-        if let (Some(id), Some(p), Some((kind, _))) = (drag.id, p, dragged)
-            && let Some(Drop::At(At::Grid(cell))) = drop_at(&lay, &drag, p, near)
+        if let (Some(id), Some(p), Some(kind)) = (drag.id, p, dragged)
+            && let Some(Drop::At(At::Grid(cell))) = drop_at(&lay, &drag, p)
         {
-            let ok = if drag.near {
-                (kind.stacks() && inv.items.iter().any(|i| i.kind == kind))
-                    || inv.room(kind, drag.turned, cell, None)
-            } else {
-                inv.fits(id, drag.turned, cell)
-            };
+            let ok = inv.fits(id, drag.turned, cell);
             let r = cells(&lay, cell, size_of(kind, drag.turned));
             let tint = if ok { hex(0x4caf50) } else { hex(0xc0392b) };
             g.rect(r.center(), r.half_size(), 0.0, tint.alpha(0.35));
@@ -460,7 +318,7 @@ fn draw(
         let hover = p
             .and_then(|p| (0..inv.items.len()).find(|&i| rect_of(&lay, &inv.items[i]).contains(p)));
         for (i, item) in inv.items.iter().enumerate() {
-            if !drag.near && Some(i) == drag.id {
+            if Some(i) == drag.id {
                 continue;
             }
             let r = rect_of(&lay, item);
@@ -477,16 +335,6 @@ fn draw(
                 text.push((count_at(r), format!("x{}", item.count), 12.0, hex(0xf0ead8)));
             }
         }
-        let hover_near =
-            p.and_then(|p| near_rects(&lay, pockets).iter().position(|r| r.contains(p)));
-        if let (Some(i), None, Some(p)) = (hover_near, drag.id, p) {
-            text.push((
-                p + vec2(14.0, -14.0),
-                format!("{}  (ctrl- or right-click takes)", pockets[i].0.name()),
-                14.0,
-                hex(0xf0ead8),
-            ));
-        }
         if let (Some(i), None) = (hover, drag.id)
             && let Some(p) = p
         {
@@ -501,7 +349,7 @@ fn draw(
         }
         text.push((
             vec2(-340.0, lay.hands.min.y - 20.0),
-            "Drag to move, R turns it\nDrop on 1-4 to bind, right-click clears\nCtrl-click: to or from his pockets\nTab or Esc closes"
+            "Drag to move, R turns it\nDrop on 1-4 to bind, right-click clears\nTab or Esc closes"
                 .into(),
             12.0,
             hex(0x9aa0a6),
@@ -538,7 +386,7 @@ fn draw(
         ));
     }
 
-    if let (Some((kind, _)), Some(p)) = (dragged, p) {
+    if let (Some(kind), Some(p)) = (dragged, p) {
         let size = size_of(kind, drag.turned).as_vec2() * CELL;
         let tl = p - drag.grab;
         let r = Rect::new(tl.x, tl.y - size.y, tl.x + size.x, tl.y);
@@ -583,18 +431,15 @@ mod tests {
         // The lockpicks, taken by their middle, let go over cell (3, 2).
         let drag = Drag {
             id: Some(2),
-            near: false,
             turned: false,
             grab: vec2(0.5, -0.5) * CELL,
         };
         let p = lay.grid + vec2(3.4, -2.6) * CELL;
-        let landed = drop_at(&lay, &drag, p, false);
+        let landed = drop_at(&lay, &drag, p);
         assert!(matches!(landed, Some(Drop::At(At::Grid(cell))) if cell == ivec2(3, 2)));
-        let hands = drop_at(&lay, &drag, lay.hands.center(), false);
+        let hands = drop_at(&lay, &drag, lay.hands.center());
         assert!(matches!(hands, Some(Drop::At(At::Hands))));
-        let slot = drop_at(&lay, &drag, lay.quick[3].center(), false);
-        let near = drop_at(&lay, &drag, lay.near.center(), true);
-        assert!(matches!(near, Some(Drop::Near)));
+        let slot = drop_at(&lay, &drag, lay.quick[3].center());
         assert!(matches!(slot, Some(Drop::Quick(3))));
     }
 }

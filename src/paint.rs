@@ -1,3 +1,4 @@
+use crate::crew::{Look, Outfit};
 use crate::inventory::Kind;
 use crate::map::{DoorKind, NORTH, Prop, PropKind, SOUTH, face_dir};
 use crate::movement::TILE;
@@ -80,7 +81,7 @@ impl Frame {
         x: Vec2::X,
         y: Vec2::Y,
     };
-    fn at(&self, p: Vec2) -> Vec2 {
+    pub fn at(&self, p: Vec2) -> Vec2 {
         self.origin + self.x * p.x + self.y * p.y
     }
 }
@@ -750,7 +751,6 @@ pub struct RobberParts {
 
 const SKIN: Hex = hex(0xd8a47a);
 const BEANIE: Hex = hex(0x1c1c22);
-const STRIPE_DARK: Hex = hex(0x1d1e24);
 const STRIPE_LIGHT: Hex = hex(0xe6e0d2);
 const BURLAP: Hex = hex(0xb08a54);
 
@@ -771,8 +771,8 @@ pub fn door_leaf(kind: DoorKind) -> Mesh {
     g.build()
 }
 
-/// Fading, if he is not the robber looking.
-pub fn robber(fades: bool) -> RobberParts {
+/// Fading, if he is not the robber looking; in his look's outfit and colour.
+pub fn robber(fades: bool, look: &Look) -> RobberParts {
     let build = |f: &dyn Fn(&mut Painter)| {
         let mut g = Painter {
             fades,
@@ -803,11 +803,8 @@ pub fn robber(fades: bool) -> RobberParts {
             g.circle(vec2(9.0, 0.0), 3.0, BURLAP.shade(-0.3));
             g.rect(vec2(6.0, 6.0), vec2(4.0, 2.2), 0.4, hex(0x7ab06a));
         }),
-        torso: build(&|g| striped_ellipse(g, vec2(11.5, 17.0))),
-        arm: build(&|g| {
-            g.capsule(Vec2::ZERO, vec2(14.0, 0.0), 8.5, STRIPE_DARK);
-            g.line(vec2(4.0, 0.0), vec2(7.0, 0.0), 8.0, STRIPE_LIGHT);
-        }),
+        torso: build(&|g| torso(g, look)),
+        arm: build(&|g| sleeve(g, look)),
         glove: build(&|g| {
             g.circle(Vec2::ZERO, 4.8, hex(0x111114));
             g.circle(vec2(0.9, 0.9), 1.9, hex(0x26262c));
@@ -830,103 +827,8 @@ pub fn robber(fades: bool) -> RobberParts {
                 hex(0xfff4d8).glow(3.0),
             )
         }),
-        head: build(&|g| {
-            g.circle(Vec2::ZERO, 10.5, SKIN.shade(-0.25));
-            g.circle(vec2(0.5, 0.0), 9.8, SKIN);
-            g.ellipse(vec2(6.0, 0.0), vec2(3.5, 8.6), 0.0, hex(0x0e0e10));
-            g.circle(vec2(-1.8, 0.0), 9.6, BEANIE);
-            g.ellipse(vec2(3.6, 0.0), vec2(2.0, 9.0), 0.0, BEANIE.shade(0.15));
-            g.line(vec2(-8.0, 0.0), vec2(2.0, 0.0), 1.0, BEANIE.shade(0.1));
-            g.circle(vec2(-4.0, 0.0), 3.8, hex(0x8c1f2a));
-            g.circle(vec2(-4.6, 0.6), 1.8, hex(0xb03040));
-        }),
+        head: build(&|g| head(g, look)),
         streak: build(&|g| g.line(vec2(-16.0, 0.0), Vec2::ZERO, 2.0, hex(0xffffff).alpha(0.22))),
-    }
-}
-
-pub struct GuardParts {
-    pub shadow: Mesh,
-    pub foot: Mesh,
-    pub torso: Mesh,
-    /// A sleeve from the shoulder along `+x`, 9 long: stretched to the glove.
-    pub arm: Mesh,
-    pub glove: Mesh,
-    pub head: Mesh,
-}
-
-const UNIFORM: Hex = hex(0x2b3d63);
-const CAP: Hex = hex(0x1c2944);
-const GLOVE: Hex = hex(0x16161a);
-const REFLECTIVE: Hex = hex(0xc8cec2);
-
-/// A security guard, facing `+x` like the robber: peaked cap, epaulettes, a
-/// reflective band across his back, radio, badge and holster.
-pub fn guard() -> GuardParts {
-    let build = |f: &dyn Fn(&mut Painter)| {
-        let mut g = Painter {
-            fades: true,
-            ..Painter::default()
-        };
-        f(&mut g);
-        g.build()
-    };
-    GuardParts {
-        shadow: build(&|g| {
-            g.circle(vec2(-2.0, -2.0), 24.0, hex(0x000000).alpha(0.12));
-            g.circle(vec2(-2.0, -2.0), 20.0, hex(0x000000).alpha(0.18));
-        }),
-        foot: build(&|g| {
-            g.ellipse(Vec2::ZERO, vec2(8.5, 5.5), 0.0, hex(0x0e0e10));
-            g.ellipse(vec2(3.0, 0.0), vec2(4.0, 3.2), 0.0, hex(0x34343a));
-        }),
-        torso: build(&|g| {
-            g.ellipse(Vec2::ZERO, vec2(12.5, 18.5), 0.0, UNIFORM.shade(-0.45));
-            g.ellipse(Vec2::ZERO, vec2(11.3, 17.3), 0.0, UNIFORM);
-            g.ellipse(vec2(3.0, 0.0), vec2(6.0, 12.5), 0.0, UNIFORM.shade(0.07));
-            // The reflective band across his back, to the shirt's edges.
-            let edge = |x: f32| 16.8 * (1.0 - (x / 11.3).powi(2)).sqrt();
-            let (a, b) = (-5.6, -8.6);
-            g.poly(
-                &[
-                    vec2(a, -edge(a)),
-                    vec2(a, edge(a)),
-                    vec2(b, edge(b)),
-                    vec2(b, -edge(b)),
-                ],
-                REFLECTIVE,
-            );
-            // The holster on his right hip, under his hand.
-            g.rounded(vec2(-1.5, -18.4), vec2(4.2, 2.6), 1.2, pal::BLACK);
-            g.rect(vec2(0.8, -19.0), vec2(1.3, 1.5), 0.0, hex(0x3a3b42));
-            for side in [-1.0, 1.0] {
-                let at = vec2(0.5, 13.6 * side);
-                g.rounded(at, vec2(5.2, 2.8), 1.4, UNIFORM.shade(-0.4));
-                g.rect(at + vec2(4.2, 0.0), vec2(0.7, 2.4), 0.0, pal::BRASS);
-            }
-            // The radio clipped to his left shoulder, its aerial over it.
-            g.line(vec2(2.0, 9.5), vec2(-3.5, 12.5), 1.0, pal::BLACK);
-            g.rounded(vec2(3.2, 8.6), vec2(2.8, 1.9), 0.8, pal::BLACK);
-            g.circle(vec2(4.8, 8.0), 0.6, hex(0x3cd070));
-            g.circle(vec2(5.8, -6.8), 2.2, pal::BRASS);
-            g.circle(vec2(5.8, -6.8), 1.1, pal::BRASS.shade(-0.35));
-        }),
-        arm: build(&|g| {
-            g.capsule(Vec2::ZERO, vec2(9.0, 0.0), 8.6, UNIFORM.shade(-0.15));
-            g.line(vec2(7.8, 0.0), vec2(9.0, 0.0), 8.4, UNIFORM.shade(-0.4));
-        }),
-        glove: build(&|g| {
-            g.circle(Vec2::ZERO, 4.0, GLOVE);
-            g.circle(vec2(0.8, 0.8), 1.6, GLOVE.shade(0.15));
-        }),
-        head: build(&|g| {
-            g.ellipse(vec2(8.0, 0.0), vec2(4.8, 8.6), 0.0, hex(0x0b0c10));
-            g.ellipse(vec2(9.4, 0.0), vec2(2.2, 5.6), 0.0, hex(0x2c3040));
-            g.circle(Vec2::ZERO, 10.4, pal::BRASS.shade(-0.3));
-            g.circle(vec2(-0.3, 0.0), 9.4, CAP);
-            g.circle(vec2(-1.5, 1.0), 5.5, CAP.shade(0.08));
-            g.circle(vec2(5.6, 0.0), 2.5, pal::BRASS);
-            g.circle(vec2(5.6, 0.0), 1.2, pal::BRASS.shade(-0.35));
-        }),
     }
 }
 
@@ -1033,6 +935,19 @@ pub fn item(g: &mut Painter, kind: Kind, half: Vec2) {
                 coin_face(g, at, 7.5);
             }
         }
+        Kind::Trap => {
+            g.rounded(Vec2::ZERO, vec2(hx - 6.0, hy - 10.0), 4.0, hex(0x2b2f35));
+            for side in [-1.0, 1.0] {
+                g.rect(
+                    vec2((hx - 10.0) * side, 0.0),
+                    vec2(4.0, hy - 10.0),
+                    0.0,
+                    pal::GOLD,
+                );
+            }
+            g.rect(Vec2::ZERO, vec2(hx - 18.0, hy - 16.0), 0.0, hex(0x07080a));
+            g.circle(Vec2::ZERO, 2.0, hex(0xffb030));
+        }
         Kind::Lockpicks => {
             for k in 0..3 {
                 let y = -4.0 + 4.0 * k as f32;
@@ -1134,64 +1049,449 @@ pub fn target() -> Mesh {
     g.build()
 }
 
-/// The "Zz" over a guard knocked out; a pale glow, to read in the dark.
-pub fn snore() -> Mesh {
-    let mut g = Painter::default();
-    let (ink, hot) = (hex(0x16120f).paint(), hex(0xbcd8ff).glow(1.6));
-    for (c, s) in [(Vec2::ZERO, 6.0), (vec2(11.0, 9.0), 4.0)] {
-        let zig = [
-            c + vec2(-s, s),
-            c + vec2(s, s),
-            c + vec2(-s, -s),
-            c + vec2(s, -s),
-        ];
-        for (w, paint) in [(4.6 * s / 6.0, ink), (2.4 * s / 6.0, hot)] {
-            for p in zig.windows(2) {
-                g.capsule(p[0], p[1], w, paint);
-            }
+const PALE: Hex = hex(0xc9d3d6);
+const BONE: Hex = hex(0x6f7d86);
+const HOLLOW: Hex = hex(0x040405);
+const HAIR: Hex = hex(0x0b0b0e);
+const SHROUD: Hex = hex(0x9aa6ad);
+
+pub fn noise1(x: f32) -> f32 {
+    ((x * 12.9898).sin() * 43758.547).fract().abs()
+}
+
+/// The wraith at `t` seconds, facing `+x`, crawling: a mass of wet black hair
+/// over its back, a pale face thrown back to stare up out of the screen
+/// through it, bony arms too long reaching ahead, torn shroud trailing. It
+/// sways, and every few seconds it jerks and flickers. Dimly lit from within
+/// (it reads in the dark) and fading out of sight like people.
+pub fn wraith(t: f32) -> Mesh {
+    let sway = |speed: f32, seed: f32| {
+        (t * speed + seed).sin() * 0.6 + (t * speed * 1.7 + seed * 1.3).sin() * 0.4
+    };
+    // A glitch: 0.25 s at a random moment of every 2.5 s, jumping each 20th.
+    let slot = (t / 2.5).floor();
+    let start = slot * 2.5 + 0.4 + 1.7 * noise1(slot);
+    let glitch = t >= start && t < start + 0.25;
+    let tick = (t * 20.0).floor();
+    let jolt = if glitch {
+        vec2(noise1(tick) - 0.5, noise1(tick + 0.5) - 0.5) * 10.0
+    } else {
+        Vec2::ZERO
+    };
+    let k = if glitch && noise1(tick + 0.25) < 0.5 {
+        0.3
+    } else {
+        1.0
+    };
+    let mut g = Painter {
+        fades: true,
+        ..Painter::default()
+    };
+    g.frame.origin = jolt;
+    let lit = |h: Hex, power: f32, a: f32| {
+        let mut p = h.glow(power);
+        p.rgba[3] = a * k;
+        p
+    };
+    let flat = |h: Hex, a: f32| h.alpha(a * k);
+
+    // The cold patch it crawls in.
+    for (r, a) in [(50.0, 0.10), (38.0, 0.12), (26.0, 0.16)] {
+        g.circle(vec2(-4.0, 0.0), r, flat(hex(0x000000), a));
+    }
+    // Shroud tatters trailing behind, narrowing and thinning to nothing.
+    for i in 0..5 {
+        let y0 = -10.0 + 5.0 * i as f32;
+        let len = 40.0 + 18.0 * noise1(i as f32 + 0.3);
+        let mut prev = vec2(-10.0, y0);
+        for s in 1..=6 {
+            let f = s as f32 / 6.0;
+            let wave = sway(1.4, i as f32 * 0.9 + f * 2.0) * 7.0 * f;
+            let p = vec2(-10.0 - len * f, y0 * (1.0 + 0.7 * f) + wave);
+            let paint = lit(SHROUD, 0.2, 0.32 * (1.0 - f) + 0.04);
+            g.line(prev, p, 10.0 * (1.0 - 0.85 * f), paint);
+            prev = p;
         }
     }
-    g.build()
-}
-
-/// The "?" where a guard heard something; it glows to read in the dark.
-pub fn question() -> Mesh {
-    let mut g = Painter::default();
-    let (ink, hot) = (hex(0x16120f).paint(), hex(0xffc23a).glow(2.0));
-    let c = vec2(0.0, 19.0);
-    let hook: Vec<Vec2> = (0..=10)
-        .map(|i| c + Vec2::from_angle(2.6 - 3.8 * i as f32 / 10.0) * 6.5)
-        .chain([vec2(0.0, 8.5)])
-        .collect();
-    for (w, paint) in [(9.0, ink), (5.2, hot)] {
-        for p in hook.windows(2) {
-            g.capsule(p[0], p[1], w, paint);
+    // Arms too long, elbows out like a spider's, one reaching further; the
+    // fingers twitch.
+    for (side, reach) in [(-1.0, 1.0), (1.0, 0.8)] {
+        let shoulder = vec2(2.0, 10.0 * side);
+        let elbow = vec2(14.0 + 3.0 * sway(0.7, side), 21.0 * side);
+        let wrist = vec2(
+            16.0 + 26.0 * reach + 3.0 * sway(0.9, side + 1.0),
+            11.0 * side,
+        );
+        for (a, b, w) in [(shoulder, elbow, 3.4), (elbow, wrist, 2.6)] {
+            g.capsule(a, b, w + 1.0, lit(BONE, 0.25, 0.8));
+            g.capsule(a, b, w, lit(PALE, 0.32, 0.8));
+            let n = (b - a).perp().normalize() * w * 0.25 * side;
+            g.line(a + n, b + n, 0.7, lit(BONE, 0.25, 0.7));
+        }
+        let dir = (wrist - elbow).normalize();
+        let palm = wrist + dir * 3.5;
+        g.ellipse(palm, vec2(3.6, 2.8), dir.to_angle(), lit(PALE, 0.35, 0.85));
+        for f in 0..4 {
+            let spread = (f as f32 - 1.5) * 0.42 * side;
+            let curl = (0.45 + 0.3 * sway(6.0 + f as f32, f as f32 * 2.1)) * -side;
+            let d1 = dir.rotate(Vec2::from_angle(spread));
+            let d2 = d1.rotate(Vec2::from_angle(curl));
+            let base = palm + d1 * 2.5;
+            let knuckle = base + d1 * 8.5;
+            let tip = knuckle + d2 * 7.0;
+            g.capsule(base, knuckle, 1.5, lit(PALE, 0.35, 0.85));
+            g.capsule(knuckle, tip, 1.1, lit(PALE, 0.35, 0.85));
+            g.circle(tip, 0.8, flat(HOLLOW, 0.9));
         }
     }
-    g.circle(Vec2::ZERO, 5.5, ink);
-    g.circle(Vec2::ZERO, 3.2, hot);
-    g.build()
-}
-
-/// The "!" over the robber while a guard sees him; it glows to read in the dark.
-pub fn alarm() -> Mesh {
-    let mut g = Painter::default();
-    let (ink, hot) = (hex(0x16120f), hex(0xff4a32).glow(2.2));
-    g.capsule(vec2(0.0, 10.0), vec2(0.0, 24.0), 9.0, ink);
-    g.circle(Vec2::ZERO, 5.5, ink);
-    g.capsule(vec2(0.0, 10.0), vec2(0.0, 24.0), 5.2, hot);
-    g.circle(Vec2::ZERO, 3.2, hot);
-    g.build()
-}
-
-/// An ellipse in seven vertical bands, dark and light.
-fn striped_ellipse(g: &mut Painter, r: Vec2) {
+    // Bony shoulders, mostly under the hair.
+    g.ellipse(Vec2::ZERO, vec2(8.0, 12.5), 0.0, lit(BONE, 0.25, 0.85));
+    g.ellipse(vec2(0.5, 0.0), vec2(7.0, 11.4), 0.0, lit(PALE, 0.3, 0.85));
+    // The head, swaying, snapping aside in a glitch.
+    let snap = if glitch {
+        (noise1(tick + 0.75) - 0.5) * 1.2
+    } else {
+        0.0
+    };
+    let tilt = sway(0.5, 2.0) * 0.12 + snap;
+    let face = |p: Vec2| vec2(13.0, 0.0) + Vec2::from_angle(tilt).rotate(p);
+    // Hair: a wet mass over the back, clumps flowing back over the shoulders.
     g.ellipse(
-        Vec2::ZERO,
-        r + Vec2::splat(1.2),
-        0.0,
-        STRIPE_DARK.shade(-0.4),
+        face(vec2(-12.0, 0.0)),
+        vec2(17.0, 13.0),
+        tilt,
+        flat(HAIR, 0.97),
     );
+    for i in 0..24 {
+        let a = PI + (i as f32 / 23.0 - 0.5) * 1.3;
+        let len = 34.0 + 22.0 * noise1(i as f32 + 0.7);
+        let root = face(Vec2::from_angle(a) * 7.0);
+        let wet = if i % 5 == 2 { HAIR.shade(0.12) } else { HAIR };
+        let mut prev = root;
+        for s in 1..=7 {
+            let f = s as f32 / 7.0;
+            let out = Vec2::from_angle(a) * vec2(1.0, 0.9) * len * f;
+            let wave = (f * 9.0 + i as f32).sin() * 2.0 + sway(0.9, i as f32 * 1.3 + f) * 3.5;
+            let p = root + out + vec2(0.0, wave * f);
+            g.line(prev, p, 5.5 * (1.0 - 0.7 * f), flat(wet, 0.95 - 0.45 * f));
+            prev = p;
+        }
+    }
+    // The face up through the hair, forehead back (-x), chin ahead: sunken
+    // round the eyes, the jaw hanging open in a long scream.
+    g.ellipse(
+        face(vec2(0.5, 0.0)),
+        vec2(12.6, 9.0),
+        tilt,
+        lit(BONE, 0.3, 0.95),
+    );
+    g.ellipse(
+        face(vec2(0.5, 0.0)),
+        vec2(11.8, 8.2),
+        tilt,
+        lit(PALE, 0.45, 0.95),
+    );
+    g.ellipse(
+        face(vec2(-2.0, 0.0)),
+        vec2(3.8, 7.4),
+        tilt,
+        lit(BONE, 0.3, 0.7),
+    );
+    for side in [-1.0, 1.0] {
+        let cheek = face(vec2(3.0, 5.2 * side));
+        g.ellipse(
+            cheek,
+            vec2(4.2, 1.6),
+            tilt + 0.15 * side,
+            lit(BONE, 0.3, 0.6),
+        );
+        let eye = vec2(-2.4, 3.4 * side);
+        g.ellipse(
+            face(eye),
+            vec2(2.7, 1.6),
+            tilt - 0.35 * side,
+            flat(HOLLOW, 1.0),
+        );
+        if !glitch {
+            let drift = vec2(sway(0.4, side), sway(0.5, side + 3.0)) * 0.4;
+            g.circle(face(eye + drift), 0.45, lit(hex(0xdfe9f2), 1.6, 0.9));
+        }
+        g.circle(face(vec2(1.2, 0.7 * side)), 0.45, flat(HOLLOW, 0.9));
+    }
+    let open = 0.5 + 0.5 * (t * 0.7).sin();
+    let mouth = face(vec2(6.0 + 1.0 * open, 0.0));
+    g.ellipse(
+        mouth,
+        vec2(2.9 + 2.6 * open, 2.5),
+        tilt,
+        lit(BONE, 0.2, 0.9),
+    );
+    g.ellipse(mouth, vec2(2.6 + 2.5 * open, 2.1), tilt, flat(HOLLOW, 1.0));
+    // Hair over the forehead and in wet strands down the sides of the face.
+    g.ellipse(
+        face(vec2(-11.0, 0.0)),
+        vec2(3.6, 8.6),
+        tilt,
+        flat(HAIR, 0.97),
+    );
+    for side in [-1.0, 1.0] {
+        for s in 0..4 {
+            let y = (5.0 + 1.3 * s as f32) * side;
+            let end = vec2(
+                3.0 + 2.8 * s as f32,
+                y + (2.4 + sway(0.8, s as f32 + side) * 0.8) * side,
+            );
+            g.line(face(vec2(-10.0, y * 0.8)), face(end), 1.8, flat(HAIR, 0.9));
+        }
+    }
+    g.build()
+}
+
+/// A bare footprint the wraith leaves, toes along `+x`, the left one if
+/// `left`: a faint cold glow, to be seen in the dark, at `strength` (0 to 1).
+pub fn footprint(left: bool, strength: f32) -> Mesh {
+    let mut g = Painter {
+        fades: true,
+        ..Painter::default()
+    };
+    let side = if left { 1.0 } else { -1.0 };
+    let mut ink = hex(0x9fe8ff).glow(0.5);
+    ink.rgba[3] = 0.55 * strength;
+    g.ellipse(vec2(2.0, 0.6 * side), vec2(5.5, 3.0), 0.08 * side, ink);
+    g.ellipse(vec2(-5.5, 0.0), vec2(3.0, 2.4), 0.0, ink);
+    for (i, r) in [1.5, 1.1, 1.0, 0.9, 0.8].into_iter().enumerate() {
+        let y = (2.6 - 1.4 * i as f32) * side;
+        g.circle(vec2(8.6 - 0.5 * i as f32 * i as f32 * 0.3, y), r, ink);
+    }
+    g.build()
+}
+
+/// A note on the floor: a sheet of paper, a corner turned, scrawled on in
+/// ink; gone out of sight like people, so it is found by looking.
+pub fn note() -> Mesh {
+    let mut g = Painter {
+        fades: true,
+        ..Painter::default()
+    };
+    g.rect(
+        vec2(1.0, -1.5),
+        vec2(7.5, 9.5),
+        0.0,
+        hex(0x000000).alpha(0.25),
+    );
+    g.poly(
+        &[
+            vec2(-7.0, -9.0),
+            vec2(7.0, -9.0),
+            vec2(7.0, 5.5),
+            vec2(3.5, 9.0),
+            vec2(-7.0, 9.0),
+        ],
+        pal::PAPER,
+    );
+    g.poly(
+        &[vec2(3.5, 5.5), vec2(7.0, 5.5), vec2(3.5, 9.0)],
+        pal::PAPER.shade(-0.18),
+    );
+    let ink = hex(0x2a2430);
+    g.line(vec2(-3.5, 4.0), vec2(0.5, -4.5), 2.0, ink);
+    g.line(vec2(0.5, -4.5), vec2(3.0, 3.0), 2.0, ink);
+    g.line(vec2(-4.5, -6.5), vec2(4.5, -6.0), 1.0, ink.shade(0.3));
+    g.build()
+}
+
+/// The ghost trap from above: a steel box, hazard stripes at its ends. Set,
+/// its jaws stand open and an amber light shows it armed; sprung, they are
+/// shut with the wraith's cold light at the seam.
+pub fn trap(sprung: bool) -> Mesh {
+    let mut g = Painter::default();
+    g.rounded(
+        vec2(2.0, -3.0),
+        vec2(17.0, 12.0),
+        4.0,
+        hex(0x000000).alpha(0.3),
+    );
+    g.rounded(Vec2::ZERO, vec2(16.0, 11.0), 3.0, hex(0x2b2f35));
+    for side in [-1.0, 1.0] {
+        let x = 13.0 * side;
+        g.rect(vec2(x, 0.0), vec2(3.0, 11.0), 0.0, hex(0x1a1a1c));
+        for k in -2..=2 {
+            let y = k as f32 * 4.4;
+            g.rect(vec2(x, y), vec2(3.0, 1.1), 0.6, pal::GOLD);
+        }
+    }
+    if sprung {
+        g.rect(vec2(0.0, 4.5), vec2(9.5, 4.3), 0.0, pal::STEEL);
+        g.rect(vec2(0.0, -4.5), vec2(9.5, 4.3), 0.0, pal::STEEL_DARK);
+        g.rect(Vec2::ZERO, vec2(9.5, 0.6), 0.0, hex(0x9fe8ff).glow(1.6));
+        g.circle(vec2(0.0, 9.0), 1.2, hex(0xff4030).glow(2.5));
+    } else {
+        g.rect(Vec2::ZERO, vec2(9.5, 8.6), 0.0, hex(0x07080a));
+        for side in [-1.0, 1.0] {
+            g.rect(
+                vec2(0.0, 11.5 * side),
+                vec2(9.5, 2.2),
+                0.0,
+                pal::STEEL.shade(-0.1),
+            );
+        }
+        g.circle(vec2(0.0, 0.0), 1.2, hex(0xffb030).glow(2.5));
+    }
+    g.build()
+}
+
+const JACKET: Hex = hex(0x23252b);
+const WHITE: Hex = hex(0xe8e6e0);
+
+/// His top from above, facing `+x`, `r` its half size.
+fn torso(g: &mut Painter, look: &Look) {
+    let c = look.colour();
+    let r = vec2(11.5, 17.0);
+    let body = |g: &mut Painter, cloth: Hex| {
+        g.ellipse(Vec2::ZERO, r + Vec2::splat(1.2), 0.0, cloth.shade(-0.45));
+        g.ellipse(Vec2::ZERO, r, 0.0, cloth);
+    };
+    match look.outfit {
+        Outfit::Stripes => striped_ellipse(g, r, c),
+        Outfit::Hoodie => {
+            body(g, c);
+            // The hood down his back, a seam over the pouch.
+            g.ellipse(vec2(-6.0, 0.0), vec2(4.5, 9.0), 0.0, c.shade(-0.2));
+            g.line(vec2(3.0, -7.0), vec2(3.0, 7.0), 1.2, c.shade(-0.3));
+        }
+        Outfit::Suit => {
+            body(g, JACKET);
+            // The shirt's V at his collar, his tie in his colour.
+            g.poly(
+                &[vec2(r.x - 0.5, -5.0), vec2(r.x - 0.5, 5.0), vec2(2.5, 0.0)],
+                WHITE,
+            );
+            g.line(vec2(4.5, 0.0), vec2(r.x - 0.8, 0.0), 2.6, c);
+            g.line(
+                vec2(-r.x + 1.5, 0.0),
+                vec2(-4.0, 0.0),
+                0.8,
+                JACKET.shade(-0.3),
+            );
+        }
+        Outfit::Tracksuit => {
+            body(g, c);
+            // White stripes over his shoulders, the zip at his front.
+            for side in [-1.0, 1.0] {
+                g.line(vec2(-5.5, 13.5 * side), vec2(5.5, 13.5 * side), 1.6, WHITE);
+            }
+            g.line(
+                vec2(r.x - 5.0, 0.0),
+                vec2(r.x - 0.6, 0.0),
+                1.0,
+                c.shade(0.45),
+            );
+        }
+    }
+}
+
+/// His sleeves' cloth, and the band round them.
+fn sleeve_cloth(look: &Look) -> Hex {
+    match look.outfit {
+        Outfit::Suit => JACKET,
+        _ => look.colour(),
+    }
+}
+
+/// A sleeve from the shoulder along `+x`, 15 to the glove.
+fn sleeve(g: &mut Painter, look: &Look) {
+    let band = match look.outfit {
+        Outfit::Stripes => STRIPE_LIGHT,
+        Outfit::Hoodie => look.colour().shade(-0.25),
+        Outfit::Suit => JACKET.shade(0.15),
+        Outfit::Tracksuit => WHITE,
+    };
+    g.capsule(Vec2::ZERO, vec2(14.0, 0.0), 8.5, sleeve_cloth(look));
+    g.line(vec2(4.0, 0.0), vec2(7.0, 0.0), 8.0, band);
+}
+
+/// His head from above, his face to `+x`: a beanie, a hood, slicked hair and
+/// a mask, or a cap, by his outfit.
+fn head(g: &mut Painter, look: &Look) {
+    let c = look.colour();
+    let mask = hex(0x0e0e10);
+    g.circle(Vec2::ZERO, 10.5, SKIN.shade(-0.25));
+    g.circle(vec2(0.5, 0.0), 9.8, SKIN);
+    match look.outfit {
+        Outfit::Stripes => {
+            g.ellipse(vec2(6.0, 0.0), vec2(3.5, 8.6), 0.0, mask);
+            g.circle(vec2(-1.8, 0.0), 9.6, BEANIE);
+            g.ellipse(vec2(3.6, 0.0), vec2(2.0, 9.0), 0.0, BEANIE.shade(0.15));
+            g.line(vec2(-8.0, 0.0), vec2(2.0, 0.0), 1.0, BEANIE.shade(0.1));
+            g.circle(vec2(-4.0, 0.0), 3.8, c.shade(-0.2));
+            g.circle(vec2(-4.6, 0.6), 1.8, c.shade(0.15));
+        }
+        Outfit::Hoodie => {
+            g.circle(vec2(-1.0, 0.0), 11.2, c.shade(-0.2));
+            g.ellipse(vec2(6.0, 0.0), vec2(3.6, 7.6), 0.0, mask);
+            g.ellipse(vec2(3.2, 0.0), vec2(1.6, 9.6), 0.0, c.shade(-0.35));
+        }
+        Outfit::Suit => {
+            g.ellipse(vec2(6.0, 0.0), vec2(3.0, 8.2), 0.0, mask);
+            g.circle(vec2(-2.0, 0.0), 9.0, hex(0x2a1d14));
+            g.line(vec2(-9.0, 2.0), vec2(1.5, 2.0), 0.8, hex(0x1a120c));
+        }
+        Outfit::Tracksuit => {
+            g.ellipse(vec2(6.0, 0.0), vec2(3.4, 8.4), 0.0, mask);
+            g.circle(vec2(-1.0, 0.0), 9.8, c);
+            g.ellipse(vec2(8.5, 0.0), vec2(4.5, 7.8), 0.0, c.shade(-0.3));
+            g.circle(vec2(-1.0, 0.0), 1.4, c.shade(0.3));
+        }
+    }
+}
+
+/// The robber standing, seen from above, his face up the screen, `k` times
+/// as big: for the lobby, in one mesh.
+pub fn portrait(look: &Look, k: f32) -> Mesh {
+    let mut g = Painter::default();
+    // From his bag behind to his face, centred.
+    let base = Frame {
+        origin: Vec2::Y * 4.5 * k,
+        x: Vec2::Y * k,
+        y: Vec2::NEG_X * k,
+    };
+    let at = |p: Vec2, angle: f32| {
+        let (s, c) = angle.sin_cos();
+        Frame {
+            origin: base.at(p),
+            x: base.x * c + base.y * s,
+            y: base.y * c - base.x * s,
+        }
+    };
+    for side in [-1.0, 1.0] {
+        g.frame = at(vec2(-1.0, 8.0 * side), 0.0);
+        g.ellipse(Vec2::ZERO, vec2(8.5, 5.5), 0.0, hex(0x16120f));
+        g.ellipse(vec2(2.0, 0.0), vec2(5.0, 3.6), 0.0, hex(0x2c2420));
+        // His arms hang at his sides.
+        let (shoulder, hand) = (vec2(1.0, 14.5 * side), vec2(-3.0, 21.0 * side));
+        g.frame = at(shoulder, (hand - shoulder).to_angle());
+        g.capsule(
+            Vec2::ZERO,
+            vec2(hand.distance(shoulder), 0.0),
+            8.5,
+            sleeve_cloth(look),
+        );
+        g.frame = at(hand, 0.0);
+        g.circle(Vec2::ZERO, 4.8, hex(0x111114));
+    }
+    g.frame = base;
+    torso(&mut g, look);
+    g.frame = at(vec2(-11.0, 0.0), 0.0);
+    g.circle(Vec2::ZERO, 11.0, BURLAP.shade(-0.4));
+    g.circle(Vec2::ZERO, 9.6, BURLAP);
+    g.frame = at(vec2(2.0, 0.0), 0.0);
+    head(&mut g, look);
+    g.build()
+}
+
+/// An ellipse in seven vertical bands, dark (in `c`) and light.
+fn striped_ellipse(g: &mut Painter, r: Vec2, c: Hex) {
+    g.ellipse(Vec2::ZERO, r + Vec2::splat(1.2), 0.0, c.shade(-0.5));
     for b in 0..7 {
         let x0 = -r.x + 2.0 * r.x * b as f32 / 7.0;
         let x1 = -r.x + 2.0 * r.x * (b + 1) as f32 / 7.0;
@@ -1203,7 +1503,7 @@ fn striped_ellipse(g: &mut Painter, r: Vec2) {
         for i in (0..=6).rev() {
             pts.push(vec2(pts[i].x, -pts[i].y));
         }
-        g.poly(&pts, [STRIPE_DARK, STRIPE_LIGHT][b % 2]);
+        g.poly(&pts, [c, STRIPE_LIGHT][b % 2]);
     }
-    g.ellipse(vec2(r.x - 3.0, 0.0), vec2(2.5, 6.0), 0.0, STRIPE_DARK);
+    g.ellipse(vec2(r.x - 3.0, 0.0), vec2(2.5, 6.0), 0.0, c.shade(-0.3));
 }

@@ -3,9 +3,8 @@
 //! Doors are one-shots; footsteps a loop on each walker, at the pace he goes.
 
 use crate::doors::Shut;
-use crate::guard::Guard;
 use crate::movement::{MARCH_SPEED, TILE};
-use crate::player::{Controls, LocalPlayer, Player};
+use crate::player::{Controls, Dead, LocalPlayer, Player};
 use crate::sight::Sight;
 use bevy::audio::{
     AudioPlayer, AudioSink, AudioSinkPlayback, AudioSource, PlaybackSettings, Volume,
@@ -21,7 +20,6 @@ pub enum Clip {
     DoorOpen,
     DoorClose,
     Glass,
-    Knockout,
     Coin,
     Shot,
     Reload,
@@ -30,7 +28,7 @@ pub enum Clip {
 }
 
 /// A noise at a point in the building: its sample, if it has one, and how
-/// many tiles off a guard hears it (half as far through walls; 0, never).
+/// many tiles off the wraith hears it (half as far through walls; 0, never).
 #[derive(Message, Clone, Serialize, Deserialize)]
 pub struct Noise {
     pub clip: Option<Clip>,
@@ -47,8 +45,6 @@ const DOOR_CLOSE: &[u8] = include_bytes!("../sounds/door_close.ogg");
 const WALK: &[u8] = include_bytes!("../sounds/walking.ogg");
 // Synthesised by `sounds/glass.py`.
 const GLASS: &[u8] = include_bytes!("../sounds/glass.ogg");
-// bims2's punch, and a slowed copy of it as the body hits the floor.
-const KNOCKOUT: &[u8] = include_bytes!("../sounds/knockout.ogg");
 // Synthesised by `sounds/coin.py`.
 const COIN: &[u8] = include_bytes!("../sounds/coin.ogg");
 const SHOT: &[u8] = include_bytes!("../sounds/pistol_shot.ogg");
@@ -62,7 +58,6 @@ struct Clips {
     door_close: Handle<AudioSource>,
     walk: Handle<AudioSource>,
     glass: Handle<AudioSource>,
-    knockout: Handle<AudioSource>,
     coin: Handle<AudioSource>,
     shot: Handle<AudioSource>,
     reload: Handle<AudioSource>,
@@ -98,7 +93,6 @@ fn load(mut assets: ResMut<Assets<AudioSource>>, mut commands: Commands) {
         door_close: add(DOOR_CLOSE),
         walk: add(WALK),
         glass: add(GLASS),
-        knockout: add(KNOCKOUT),
         coin: add(COIN),
         shot: add(SHOT),
         reload: add(RELOAD),
@@ -133,13 +127,8 @@ impl Ear<'_, '_> {
 }
 
 /// Every walker gets his footsteps, silent until he moves.
-fn feet(
-    clips: Res<Clips>,
-    mut commands: Commands,
-    robbers: Query<Entity, Added<Player>>,
-    guards: Query<Entity, Added<Guard>>,
-) {
-    for e in robbers.iter().chain(&guards) {
+fn feet(clips: Res<Clips>, mut commands: Commands, robbers: Query<Entity, Added<Player>>) {
+    for e in &robbers {
         commands.entity(e).insert((
             AudioPlayer::new(clips.walk.clone()),
             PlaybackSettings::LOOP.with_volume(Volume::SILENT),
@@ -157,7 +146,6 @@ fn noises(clips: Res<Clips>, ear: Ear, mut noises: MessageReader<Noise>, mut com
             Clip::DoorOpen => (&clips.door_open, 0.7, 13.0),
             Clip::DoorClose => (&clips.door_close, 0.7, 13.0),
             Clip::Glass => (&clips.glass, 1.0, 24.0),
-            Clip::Knockout => (&clips.knockout, 0.9, 12.0),
             Clip::Coin => (&clips.coin, 0.8, 14.0),
             Clip::Shot => (&clips.shot, 0.8, 30.0),
             Clip::Reload => (&clips.reload, 0.9, 8.0),
@@ -174,19 +162,13 @@ fn noises(clips: Res<Clips>, ear: Ear, mut noises: MessageReader<Noise>, mut com
     }
 }
 
-fn steps(
-    ear: Ear,
-    mut robbers: Query<(&Player, Has<LocalPlayer>, &mut AudioSink), Without<Guard>>,
-    mut guards: Query<(&Guard, &mut AudioSink)>,
-) {
+fn steps(ear: Ear, mut robbers: Query<(&Player, Has<LocalPlayer>, Has<Dead>, &mut AudioSink)>) {
     // His own feet at a whisper crouched; anyone else's by where they are.
     let pace = |speed: f32| (speed / MARCH_SPEED).clamp(0.0, 1.8);
-    let walkers = robbers
-        .iter_mut()
-        .map(|(p, me, sink)| (&p.body, me, sink))
-        .chain(guards.iter_mut().map(|(g, sink)| (&g.body, false, sink)));
-    for (b, me, mut sink) in walkers {
-        let walking = !b.is_rolling() && b.speed > 1.0;
+    for (p, me, dead, mut sink) in &mut robbers {
+        let b = &p.body;
+        // The dead's feet make no sound.
+        let walking = !b.is_rolling() && b.speed > 1.0 && !dead;
         let soft = if b.is_crouching() { 0.4 } else { 1.0 };
         let level = match (walking, me) {
             (false, _) => 0.0,
@@ -206,7 +188,7 @@ mod tests {
     #[test]
     fn every_clip_decodes() {
         for bytes in [
-            DOOR_OPEN, DOOR_CLOSE, WALK, GLASS, KNOCKOUT, COIN, SHOT, RELOAD, UNHOLSTER, HOLSTER,
+            DOOR_OPEN, DOOR_CLOSE, WALK, GLASS, COIN, SHOT, RELOAD, UNHOLSTER, HOLSTER,
         ] {
             let clip = AudioSource {
                 bytes: bytes.into(),

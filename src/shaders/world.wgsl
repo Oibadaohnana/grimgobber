@@ -9,7 +9,7 @@ struct Params {
     eye: vec4<f32>, // the robber xy, the way he faces (cos, sin)
     map: vec4<f32>, // the map's size in tiles xy, a tile in world units z, torch count w
     misc: vec4<f32>, // mode, lamp count, flashlight on (1/0), crouched (1/0)
-    guard: vec4<f32>, // the guard xy, the way he faces (cos, sin); zero for none
+    flicker: vec4<f32>, // lights flickering: centre xy, reach z (0: none), how bright now w
     torches: array<vec4<f32>, 6>, // every flashlight on, as `eye`
     lights: array<vec4<f32>, 256>, // two a lamp: (x, y, reach, power), (r, g, b, 0)
 };
@@ -65,11 +65,6 @@ const TORCH_POWER: f32 = 1.5;
 const TORCH_REACH: f32 = 15.0;
 const DARK: f32 = 3.75;
 const VIEW: f32 = 6.0;
-// The guard's sight in tiles where lit and in the dark, and half his cone.
-const GUARD_VIEW: f32 = 10.0;
-const GUARD_DARK: f32 = 5.0;
-const GUARD_CONE: f32 = 0.7853982;
-const WATCHED: vec3<f32> = vec3<f32>(1.0, 0.42, 0.38);
 const HEARD: vec3<f32> = vec3<f32>(0.70, 0.85, 1.0);
 // The run through an opaque box, in world units, that stops a ray fully.
 const STOP_SOFT: f32 = 3.0;
@@ -273,9 +268,18 @@ fn beam(w: vec2<f32>) -> f32 {
 fn torch_at(w: vec2<f32>, dst: Spot) -> vec3<f32> {
     var light = vec3<f32>(0.0);
     for (var i = 0; i < i32(P.map.w); i++) {
-        light += one_torch(P.torches[i], w, dst);
+        light += one_torch(P.torches[i], w, dst) * flickered(P.torches[i].xy);
     }
     return light;
+}
+
+// Near the wraith's flicker, the lamps' light and the flashlights there dim in fits.
+fn flickered(p: vec2<f32>) -> f32 {
+    if P.flicker.z <= 0.0 {
+        return 1.0;
+    }
+    let near = 1.0 - smoothstep(0.8 * P.flicker.z, P.flicker.z, distance(p, P.flicker.xy));
+    return mix(1.0, P.flicker.w, near);
 }
 
 fn one_torch(t: vec4<f32>, w: vec2<f32>, dst: Spot) -> vec3<f32> {
@@ -383,34 +387,6 @@ fn seen(w: vec2<f32>, dst: Spot) -> f32 {
 }
 
 // The colour, and how clearly it is seen in alpha.
-// How clearly the guard sees a point, as guard.rs reckons it: in his cone,
-// within reach, by one ray. Where the flashlight shines (`torch`, its light)
-// he sees as far as in a lit room; that takes in the robber himself.
-fn watched(w: vec2<f32>, dst: Spot, torch: vec3<f32>) -> f32 {
-    let ahead = P.guard.zw;
-    if dot(ahead, ahead) < 0.5 {
-        return 0.0;
-    }
-    let off = w - P.guard.xy;
-    let dist = length(off);
-    let tile = P.map.z;
-    let cone = smoothstep(cos(GUARD_CONE + 0.05), cos(GUARD_CONE - 0.05), dot(off, ahead) / max(dist, 1e-3));
-    let lit = in_map(dst.cell) && textureLoad(extra, dst.cell, 0).a > 0.5;
-    let reach = mix(select(GUARD_DARK, GUARD_VIEW, lit), GUARD_VIEW, smoothstep(0.02, 0.06, luma(torch))) * tile;
-    let near = cone * (1.0 - smoothstep(reach - 0.8 * tile, reach, dist));
-    if near <= 0.0 {
-        return 0.0;
-    }
-    var clear = clear_share(trace(P.guard.xy, w, spot_of(P.guard.xy), dst, false).x);
-    // The robber crouched, a spot is hidden from him as guard.rs hides the
-    // robber: traced from the spot, a half-height thing within 2 tiles.
-    if P.misc.w > 0.5 && !dst.top && dst.object == 0u {
-        let past = trace(w, P.guard.xy, dst, spot_of(P.guard.xy), true).z;
-        clear *= select(1.0, 1.0 - smoothstep(1.5 * tile, 2.0 * tile, past), past >= 0.0);
-    }
-    return near * clear;
-}
-
 fn heard_texel(c: vec2<i32>) -> vec2<f32> {
     return select(vec2<f32>(0.0), textureLoad(heard, c, 0).rg, in_map(c));
 }
@@ -457,15 +433,11 @@ fn shade(albedo: vec3<f32>, glow: bool, ground: bool, at: vec2<f32>) -> vec4<f32
         return vec4<f32>(albedo * mix(0.35, 1.0, s), s);
     }
     let torch = torch_at(w, dst);
-    let light = ambient(dst) + baked_at(at) + torch;
+    let light = ambient(dst) + baked_at(at) * flickered(w) + torch;
     let lit = albedo * (light + vec3<f32>(0.075, 0.08, 0.11));
     let dim = albedo * light;
     let fog = mix(dim, vec3<f32>(luma(dim)), 0.85) * 0.2 + albedo * vec3<f32>(0.004, 0.006, 0.014);
     var c = mix(fog, lit, s);
-    // His cone, a light red wash, only where the robber sees.
-    if s > 0.0 {
-        c = mix(c, srgb(WATCHED), 0.2 * s * watched(w, dst, torch));
-    }
     // How far a smash carries: a faint ring where its reach runs out, in
     // the fog too (it is his own noise).
     let h = heard_at(w);
@@ -777,7 +749,7 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
     let colour = vec4<f32>(1.0, 0.0, 1.0, 1.0);
 #endif
     if P.misc.x > 1.5 {
-        // Where a guard last saw the robber: pale and see-through, in any light.
+        // A ghost: pale and see-through, in any light.
         return vec4<f32>(srgb(vec3<f32>(0.72, 0.84, 1.0)) * (0.3 + luma(colour.rgb)), colour.a * 0.45);
     }
     let c = shade(colour.rgb, mesh.uv.x > 0.5, false, w);

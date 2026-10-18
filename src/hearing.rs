@@ -1,5 +1,5 @@
 //! How far the robber's noise carries, and showing it for a smashed window
-//! or a coin landing: a faint ring sweeps out to as far as a guard hears it
+//! or a coin landing: a faint ring sweeps out to as far as the wraith hears it
 //! (`Sight::carry`, round corners and weakly through walls). Drawn tile by
 //! tile into a texture the shader draws the ring from.
 
@@ -10,7 +10,7 @@ use crate::sight::{Sight, smoothstep};
 use crate::sound::{Clip, Noise};
 use bevy::prelude::*;
 
-/// How far off a guard hears the robber's feet, in tiles: walking,
+/// How far off the robber's feet are heard, in tiles: walking,
 /// sprinting, rolling (crouched, nothing).
 pub const WALK_LOUD: f32 = 2.5;
 pub const SPRINT_LOUD: f32 = 6.0;
@@ -99,7 +99,9 @@ fn ripple(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::map::{generate, tile_centre};
     use crate::movement::{Aabb, STEP, Solids, Steer, TILE};
+    use crate::sight::Sight;
 
     #[test]
     fn crouched_feet_make_no_sound() {
@@ -118,5 +120,21 @@ mod tests {
         };
         assert_eq!(walked(false), WALK_LOUD);
         assert_eq!(walked(true), 0.0);
+    }
+
+    #[test]
+    fn noises_go_round_corners_and_lose_reach_to_walls() {
+        let sight = Sight::new(&generate(6));
+        let hears = |ear: (i32, i32), at: (i32, i32), loud: f32| {
+            let ear = sight.index(tile_centre(ear.0, ear.1)).unwrap();
+            sight.carry(tile_centre(at.0, at.1), loud, &[])[ear] > 0.0
+        };
+        // Along the pavement, 4 tiles: a sprint is heard, a walk is not.
+        assert!(hears((30, 8), (34, 8), SPRINT_LOUD));
+        assert!(!hears((30, 8), (34, 8), WALK_LOUD));
+        // 4 tiles through the bank's brick front cost 4 more (the doors
+        // are 8 tiles off, too far to go round by).
+        assert!(!hears((21, 8), (21, 12), 7.5));
+        assert!(hears((21, 8), (21, 12), 8.5));
     }
 }

@@ -1,16 +1,18 @@
 //! Playing together. `--server` hosts on UDP `PORT`; `--connect host[:port]`
-//! joins. The server runs the bank (the guard, the doors, who is where) and
+//! joins. The server runs the bank (the wraith, the doors, who is where) and
 //! replicates it; each player's robber moves on his own machine and is sent
 //! up every step, so his own feet never wait for the line.
 
+use crate::crew::{Crewmate, Leave, Look, Ready, SetLook};
 use crate::doors::Leaf;
-use crate::guard::Guard;
 use crate::inventory::Inventory;
-use crate::map::tile_centre;
-use crate::movement::{Body, TILE};
-use crate::player::{Controls, LocalPlayer, Player, spawn_robber};
-use crate::smash::Bank;
+use crate::movement::Body;
+use crate::player::{Controls, Dead, LocalPlayer, Player};
+use crate::sanity::Sanity;
 use crate::sound::Noise;
+use crate::talk::Say;
+use crate::trap::{SetTrap, TakeTrap, Trap};
+use crate::wraith::{Note, Prints, Wraith};
 use bevy::ecs::component::Mutable;
 use bevy::prelude::*;
 use bevy_replicon::bytes::Bytes;
@@ -31,7 +33,7 @@ use std::time::SystemTime;
 
 pub const PORT: u16 = 8794;
 /// Bump when what crosses the line changes: older builds are refused.
-const PROTOCOL: u64 = 1;
+const PROTOCOL: u64 = 5;
 const MAX_PLAYERS: usize = 6;
 
 /// The bank's seed, on a replicated entity: a client builds the same bank.
@@ -100,11 +102,24 @@ impl Plugin for NetPlugin {
             .replicate::<Player>()
             .replicate::<Controls>()
             .replicate::<Inventory>()
-            .replicate::<Guard>()
             .replicate::<Leaf>()
+            .replicate::<Wraith>()
+            .replicate::<Note>()
+            .replicate::<Trap>()
+            .replicate::<Crewmate>()
+            .replicate::<Look>()
+            .replicate::<Sanity>()
+            .replicate::<Dead>()
             .add_client_message::<Moved>(Channel::Unreliable)
             .add_client_message::<Packed>(Channel::Ordered)
+            .add_client_message::<Say>(Channel::Ordered)
+            .add_client_message::<SetTrap>(Channel::Ordered)
+            .add_client_message::<TakeTrap>(Channel::Ordered)
+            .add_client_message::<SetLook>(Channel::Ordered)
+            .add_client_message::<Ready>(Channel::Ordered)
+            .add_client_message::<Leave>(Channel::Ordered)
             .add_server_message::<Noise>(Channel::Unordered)
+            .add_server_message::<Prints>(Channel::Unordered)
             .register_marker::<LocalPlayer>()
             .set_marker_fns::<LocalPlayer, Player>(ours::<Player>, default_remove::<Player>)
             .set_marker_fns::<LocalPlayer, Controls>(ours::<Controls>, default_remove::<Controls>)
@@ -125,7 +140,7 @@ impl Plugin for NetPlugin {
             .add_systems(
                 PostUpdate,
                 (
-                    pass_on
+                    (pass_on::<Noise>, pass_on::<Prints>)
                         .before(ServerSystems::Send)
                         .run_if(in_state(ServerState::Running)),
                     send.before(ClientSystems::Send)
@@ -193,66 +208,80 @@ fn open(mut commands: Commands, channels: Res<RepliconChannels>) -> Result<()> {
     Ok(())
 }
 
-/// A player connects: his robber walks in at the bank's spawn.
-fn join(
-    add: On<Add, NetworkId>,
-    ids: Query<&NetworkId>,
-    bank: Option<Res<Bank>>,
-    robbers: Query<&Player>,
-    mut commands: Commands,
-) {
-    let (Ok(id), Some(bank)) = (ids.get(add.entity), bank) else {
+/// A player connects: a crewmate in the lobby.
+fn join(add: On<Add, NetworkId>, ids: Query<&NetworkId>, mut commands: Commands) {
+    let Ok(id) = ids.get(add.entity) else {
         return;
     };
     info!("player {} joined", id.get());
-    // The free tile nearest the spawn with nobody on it.
-    let map = &bank.0;
-    let free = map.free();
-    let near = |p: &Vec2| p.distance(map.spawn);
-    let at = (0..map.h)
-        .flat_map(|y| (0..map.w).map(move |x| (x, y)))
-        .filter(|&(x, y)| free[map.idx(x, y)])
-        .map(|(x, y)| tile_centre(x, y))
-        .filter(|p| robbers.iter().all(|r| r.body.pos.distance(*p) > TILE))
-        .min_by(|a, b| near(a).total_cmp(&near(b)))
-        .unwrap_or(map.spawn);
-    let robber = spawn_robber(&mut commands, at, false);
-    commands.entity(robber).insert(Owner(id.get()));
+    commands.spawn((
+        Replicated,
+        Crewmate {
+            id: id.get(),
+            ready: false,
+            in_round: false,
+        },
+    ));
 }
 
 fn leave(
     remove: On<Remove, NetworkId>,
     ids: Query<&NetworkId>,
     robbers: Query<(Entity, &Owner)>,
+    crew: Query<(Entity, &Crewmate)>,
     mut commands: Commands,
 ) {
     let Ok(id) = ids.get(remove.entity) else {
         return;
     };
     info!("player {} left", id.get());
-    for (e, owner) in &robbers {
-        if owner.0 == id.get() {
-            commands.entity(e).despawn();
-        }
+    let mine = robbers.iter().filter(|r| r.1.0 == id.get()).map(|r| r.0);
+    for e in mine.chain(crew.iter().filter(|c| c.1.id == id.get()).map(|c| c.0)) {
+        commands.entity(e).despawn();
     }
 }
 
-/// On a client, the robber the server made for this machine is the one played.
+/// The robber made for this machine's crewmate is the one played here.
 fn mine(
     add: On<Add, Owner>,
     owners: Query<&Owner>,
     joined: Option<Res<Joined>>,
+    headless: Option<Res<crate::Headless>>,
     mut commands: Commands,
 ) {
-    if let (Ok(owner), Some(joined)) = (owners.get(add.entity), joined)
-        && owner.0 == joined.0
+    if let Ok(owner) = owners.get(add.entity)
+        && headless.is_none()
+        && owner.0 == my_id(joined.as_deref())
     {
         commands.entity(add.entity).insert(LocalPlayer);
     }
 }
 
+/// This machine's crewmate's id: its client id, or 0 alone.
+pub fn my_id(joined: Option<&Joined>) -> u64 {
+    joined.map_or(0, |j| j.0)
+}
+
+/// Whose a message is: the client's id, or 0 from the one playing alone.
+pub fn client_u64(client: ClientId, ids: &Query<&NetworkId>) -> u64 {
+    id_of(client, ids).unwrap_or(0)
+}
+
 fn id_of(client: ClientId, ids: &Query<&NetworkId>) -> Option<u64> {
     Some(ids.get(client.entity()?).ok()?.get())
+}
+
+/// Whether a robber is the one a message came from: alone, the one played here.
+pub fn sent_by(
+    client: ClientId,
+    ids: &Query<&NetworkId>,
+    owner: Option<&Owner>,
+    local: bool,
+) -> bool {
+    match client.entity() {
+        None => local,
+        Some(_) => owner.is_some_and(|o| Some(o.0) == id_of(client, ids)),
+    }
 }
 
 fn moved(
@@ -282,12 +311,12 @@ fn packed(
     }
 }
 
-/// Noises made on the server, for the players to hear.
-fn pass_on(mut noises: MessageReader<Noise>, mut out: MessageWriter<ToClients<Noise>>) {
-    for noise in noises.read() {
+/// Noises and footprints made on the server, for the players.
+fn pass_on<M: Message + Clone>(mut made: MessageReader<M>, mut out: MessageWriter<ToClients<M>>) {
+    for m in made.read() {
         out.write(ToClients {
             targets: SendTargets::CLIENTS_ONLY,
-            message: noise.clone(),
+            message: m.clone(),
         });
     }
 }
