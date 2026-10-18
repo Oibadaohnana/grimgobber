@@ -205,7 +205,8 @@ fn trace(a: vec2<f32>, b: vec2<f32>, src: Spot, dst: Spot, low: bool) -> vec3<f3
                 }
             }
         }
-        if t1 >= 1.0 {
+        // Fully blocked: the rest cannot change `clear_share`. Low cover needs the whole ray.
+        if t1 >= 1.0 || (!low && opaque * len * tile >= STOP_SOFT) {
             break;
         }
         if tmax.x < tmax.y {

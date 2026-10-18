@@ -14,6 +14,23 @@ game is. This file covers how to work on it.
 - Lightweight tests: a few fast ones that pin what matters (the movement's
   numbers, the map's reachability). No broad or slow test suites.
 
+## Multiplayer first
+
+Every feature is built for 2–6 players on a headless server, even when
+only tried alone. Before writing one, decide where it runs: the server
+(authority: the guard, doors, anything that changes the bank or another
+player), the owning client (his own feet and aim), or every client (only
+drawing and sound). Then:
+
+- State that others must see lives in a replicated component or crosses
+  as a message; never only in a client's resource or local entity.
+- Simulation must run headless: no input, window, assets or GPU in it,
+  and it loops over every robber, never assumes `LocalPlayer`.
+- A client asks, the server decides and replicates: no client-side
+  change to shared state that the server never hears of.
+- Bump `net::PROTOCOL` when what crosses changes, and try it with
+  `--server` and two `--connect` clients, not only a game alone.
+
 ## Build, test, look
 
 - Work inside `nix-shell shell.nix`, which provides cargo, the runtime libs,
@@ -29,6 +46,8 @@ game is. This file covers how to work on it.
 - To check the frame rate, add `BB_UNPACED=1` and read the "smoke run: …
   fps" line. On the RX 7800 XT, in a dev build, it is about 800 fps at
   1400×900 (720 with the flashlight off, 760 with it on in a dark room).
+  On the laptop's Radeon 780M it is about 175 fps at 1400×900 and 76 at
+  2560×1440, the same in release: the per-pixel tracing bounds it.
 - `SEED=n cargo test print_map -- --ignored --nocapture` prints a map as
   ASCII (`#` brick, `=` drywall, `V` vault, `:` glass, `D` door, `o`
   furniture, letters for rooms).
