@@ -685,12 +685,20 @@ fn zoom(
     let Projection::Orthographic(ortho) = &mut *projection else {
         return;
     };
-    // Zoomed out at most to 12.5 tiles above and below the robber.
-    let most = match ortho.area.height() {
-        h if h > 0.0 => ortho.scale * 25.0 * TILE / h,
-        _ => f32::MAX,
-    };
-    let goal = goal.get_or_insert(ortho.scale);
+    // Not known before the camera's first update.
+    let h = ortho.area.height();
+    if h <= 0.0 {
+        return;
+    }
+    // Zoomed out at most to 12.5 tiles above and below the robber, and he starts
+    // there unless BB_ZOOM says otherwise.
+    let most = ortho.scale * 25.0 * TILE / h;
+    let goal = goal.get_or_insert_with(|| {
+        if crate::dev::env("BB_ZOOM").is_none() {
+            ortho.scale = most;
+        }
+        ortho.scale
+    });
     for e in wheel.read() {
         let notches = match e.unit {
             MouseScrollUnit::Line => e.y,

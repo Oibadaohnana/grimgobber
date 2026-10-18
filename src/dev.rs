@@ -7,7 +7,7 @@
 //!   Up Down Left Right at those frames, or press `Roll`, `Torch`, `Crouch`,
 //!   `Inventory`, `Slot1`–`Slot4` or `Smash`, `Throw` or `Fire` (a left click), `Use` (E), `Reload` or `NewBank` (F5) once
 //! - `BB_AIM=degrees`: aim there instead of at the pointer (0 east, 90 north)
-//! - `BB_ZOOM=scale`: world units a pixel (0.7)
+//! - `BB_ZOOM=scale`: world units a pixel to start at (else zoomed out all the way)
 //! - `BB_WINDOW=1400x900`: the window's size
 //! - `BB_SPAWN=x,y`: start on that tile
 //! - `BB_GUARD=x,y`: the guard starts on that tile (else in the security room)

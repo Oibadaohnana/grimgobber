@@ -159,8 +159,8 @@ Inside the game: **Tab** opens the inventory, **1-4** are the quick slots,
 **E** knocks out a guard you are right behind,
 **F** switches the flashlight (in hand) on and off, **T** then a
 left click sends the guard somewhere, **R** reloads the pistol in hand, **F5** builds a
-new bank, the **mouse wheel** zooms (out to at most 14 tiles above and
-below the robber), and **F11** toggles full screen.
+new bank, the **mouse wheel** zooms (it starts out as far as it goes,
+12.5 tiles above and below the robber), and **F11** toggles full screen.
 
 `cargo test` checks the movement's feel against bims' numbers. It also
 checks that on 60 seeds every room is reachable, that the same seed always
