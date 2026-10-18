@@ -1,5 +1,6 @@
 mod crew;
 mod dev;
+mod door;
 mod doors;
 mod guns;
 mod hearing;
@@ -64,6 +65,9 @@ pub fn drawn(app: &App) -> bool {
 }
 
 fn main() {
+    if let Some(port) = net::serve() {
+        door::serve(port);
+    }
     let seed = dev::env("BB_SEED")
         .and_then(|s| s.parse().ok())
         .unwrap_or_else(clock_seed);
@@ -140,6 +144,18 @@ fn main() {
             dev::DevPlugin,
         ))
         .insert_resource(NewMap(None))
+        .insert_resource(match role {
+            net::Role::Client(_) => net::Mode::Online(None),
+            // A smoke run plays alone at once, unless it is to try the title.
+            _ if dev::smoke_frames().is_some()
+                && ["BB_TITLE", "BB_JOIN", "BB_HOST"]
+                    .iter()
+                    .all(|v| dev::env(v).is_none()) =>
+            {
+                net::Mode::Alone
+            }
+            _ => net::Mode::Title,
+        })
         .insert_resource(crew::NextSeed(seed))
         .add_systems(Update, (served, clear, build_map).chain())
         .run();

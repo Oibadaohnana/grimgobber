@@ -140,12 +140,19 @@ BB_SEED=1234 cargo run
 
 ### Together
 
-Up to 6 play one bank. One machine runs the server, headless; everyone
-else connects to it (UDP, port 8794 unless given):
+Up to 6 play one bank. The game opens at a title: type a lobby code and
+Join, Host a new lobby, or Play alone. Lobbies live at `grim.buggly.de`:
+the first, always open, is **SCARE**; a new one gets a random code to give
+your crew, and closes after ten minutes with nobody in it.
+
+To run the server yourself (UDP 8794 for the door, 8795-8802 for the
+lobbies), and to point the game at it:
 
 ```bash
-cargo run -- --server              # or --server 9000
-cargo run -- --connect buggly.de   # or --connect 192.168.1.5:9000
+cargo run -- --serve                          # the door and its lobbies
+cargo run -- --door 192.168.1.5               # the title asks this door
+cargo run -- --server 9000                    # one lobby, no door
+cargo run -- --connect 192.168.1.5:9000       # straight into it
 ```
 
 The server runs the wraith, everyone's sanity and the doors, and says who

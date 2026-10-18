@@ -1,4 +1,6 @@
-//! The menus. The lobby, between rounds (or for a robber who left one): the
+//! The menus. The title: a lobby code (SCARE, the server's first) to join,
+//! a new lobby to host (the door gives it a random code), or playing alone.
+//! The lobby, between rounds (or for a robber who left one): the
 //! crew, this player's name (typed straight in), colour and outfit with his
 //! portrait, and Ready (alone, Start). In the bank, Esc opens a menu: Resume,
 //! Back to the lobby, Quit; while it is open the game hears nothing. And the
@@ -7,9 +9,10 @@
 //! a colour or an outfit, Enter (or Space, in the Esc menu) chooses.
 
 use crate::crew::{COLOURS, Crewmate, LONGEST_NAME, Leave, Look, Outfit, Ready, Settings};
+use crate::door::{Asking, CODE_LEN, FIRST};
 use crate::doors::Shut;
 use crate::inventory::Inventory;
-use crate::net::{Owner, Seed, my_id};
+use crate::net::{Knocking, Mode, Owner, Seed, TitleLine, my_id};
 use crate::paint::{self, Hex, hex};
 use crate::player::{Controls, Dead, LocalPlayer, Player, Shown};
 use crate::render::MainCamera;
@@ -21,6 +24,7 @@ use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 use bevy::ui::UiSystems;
+use bevy_replicon_renet::RenetClient;
 
 const BG: Hex = hex(0x0b0c10);
 const PANEL: Hex = hex(0x14161c);
@@ -40,10 +44,35 @@ enum Act {
     Resume,
     Lobby,
     Quit,
+    Join,
+    Host,
+    Alone,
+    Leave,
 }
 
 #[derive(Component)]
 struct LobbyRoot;
+
+#[derive(Component)]
+struct TitleRoot;
+
+/// The title's code field, its heading, and its line.
+#[derive(Component)]
+struct CodeField;
+
+#[derive(Component)]
+struct CodeHeading;
+
+#[derive(Component)]
+struct TitleStatus;
+
+/// The lobby's code, to give the crew.
+#[derive(Component)]
+struct CodeLine;
+
+/// The code typed at the title.
+#[derive(Resource)]
+struct TitleCode(String);
 
 #[derive(Component)]
 struct EscRoot;
@@ -77,12 +106,16 @@ pub struct EscMenu(pub bool);
 pub struct Nav {
     row: usize,
     item: usize,
+    /// The title's: 0 the code, then `TITLE`.
+    title: usize,
     chosen: Option<Act>,
 }
 
 const ROWS: [&str; 3] = ["NAME", "COLOUR", "OUTFIT"];
 const READY_ROW: usize = ROWS.len();
+const LEAVE_ROW: usize = READY_ROW + 1;
 const ESC: [Act; 3] = [Act::Resume, Act::Lobby, Act::Quit];
+const TITLE: [Act; 4] = [Act::Join, Act::Host, Act::Alone, Act::Quit];
 
 /// A lobby row's heading, lit while the keys are on it.
 #[derive(Component)]
@@ -94,12 +127,13 @@ impl Plugin for MenuPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<EscMenu>()
             .init_resource::<Nav>()
-            .add_systems(Startup, (lobby, esc_menu, portrait))
+            .insert_resource(TitleCode(FIRST.into()))
+            .add_systems(Startup, (title, lobby, esc_menu, portrait))
             .add_systems(PreUpdate, escape.after(UiSystems::Focus))
             .add_systems(
                 Update,
                 (
-                    (typing, hover, acts).chain(),
+                    (auto, typing, hover, acts).chain(),
                     show,
                     crew_list,
                     lines,
@@ -199,6 +233,7 @@ fn lobby(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
                 children![
                     label("BANK BOBBERY", 30.0, TEXT),
                     label("find its name, speak it, trap it", 13.0, DIM),
+                    (CodeLine, label("", 15.0, TEXT)),
                 ],
             ),
             (
@@ -277,16 +312,22 @@ fn lobby(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
                 },
                 children![
                     (
-                        Button,
-                        Act::Ready,
-                        Node {
-                            padding: UiRect::axes(Val::Px(36.0), Val::Px(10.0)),
-                            border: UiRect::all(Val::Px(1.0)),
-                            ..default()
-                        },
-                        BorderColor::all(colour(LINE)),
-                        BackgroundColor(colour(PANEL)),
-                        children![(ReadyLabel, label("", 18.0, TEXT))],
+                        row(10.0),
+                        children![
+                            (
+                                Button,
+                                Act::Ready,
+                                Node {
+                                    padding: UiRect::axes(Val::Px(36.0), Val::Px(10.0)),
+                                    border: UiRect::all(Val::Px(1.0)),
+                                    ..default()
+                                },
+                                BorderColor::all(colour(LINE)),
+                                BackgroundColor(colour(PANEL)),
+                                children![(ReadyLabel, label("", 18.0, TEXT))],
+                            ),
+                            button(Act::Leave, "Leave the lobby"),
+                        ],
                     ),
                     (Status, label("", 13.0, DIM)),
                     label(
@@ -295,6 +336,58 @@ fn lobby(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
                         LINE.shade(0.25),
                     ),
                 ],
+            ),
+        ],
+    ));
+}
+
+fn title(mut commands: Commands) {
+    commands.spawn((
+        TitleRoot,
+        Node {
+            position_type: PositionType::Absolute,
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            flex_direction: FlexDirection::Column,
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            row_gap: Val::Px(12.0),
+            ..default()
+        },
+        BackgroundColor(colour(BG)),
+        GlobalZIndex(25),
+        Visibility::Hidden,
+        children![
+            label("BANK BOBBERY", 30.0, TEXT),
+            label("find its name, speak it, trap it", 13.0, DIM),
+            Node {
+                height: Val::Px(18.0),
+                ..default()
+            },
+            (CodeHeading, heading("LOBBY CODE")),
+            (
+                CodeField,
+                Node {
+                    padding: UiRect::axes(Val::Px(14.0), Val::Px(5.0)),
+                    border: UiRect::bottom(Val::Px(1.0)),
+                    ..default()
+                },
+                BorderColor::all(colour(LINE)),
+                children![label("", 26.0, TEXT)],
+            ),
+            Node {
+                height: Val::Px(6.0),
+                ..default()
+            },
+            button(Act::Join, "Join"),
+            button(Act::Host, "Host a new lobby"),
+            button(Act::Alone, "Play alone"),
+            button(Act::Quit, "Quit"),
+            (TitleStatus, label("", 13.0, DIM)),
+            label(
+                "type a code   up/down: move   enter: choose",
+                11.0,
+                LINE.shade(0.25),
             ),
         ],
     ));
@@ -377,6 +470,28 @@ pub fn escape(
     mouse.reset_all();
 }
 
+/// What the title's actions need beside the rest.
+type Talking<'w> = (
+    Res<'w, TitleCode>,
+    ResMut<'w, Mode>,
+    ResMut<'w, TitleLine>,
+    Option<Res<'w, Knocking>>,
+    Option<ResMut<'w, RenetClient>>,
+);
+
+/// `BB_JOIN=CODE` or `BB_HOST=1`: the title knocks at once, for trying it.
+fn auto(mut code: ResMut<TitleCode>, mut nav: ResMut<Nav>, mut done: Local<bool>) {
+    if std::mem::replace(&mut *done, true) {
+        return;
+    }
+    if let Some(c) = crate::dev::env("BB_JOIN") {
+        code.0 = c.to_uppercase();
+        nav.chosen = Some(Act::Join);
+    } else if crate::dev::env("BB_HOST").is_some() {
+        nav.chosen = Some(Act::Host);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn acts(
     acts: Query<(&Interaction, &Act), Changed<Interaction>>,
@@ -389,6 +504,8 @@ fn acts(
     mut ready: MessageWriter<Ready>,
     mut leave: MessageWriter<Leave>,
     mut exit: MessageWriter<AppExit>,
+    (code, mut mode, mut line, knocking, mut client): Talking,
+    mut commands: Commands,
 ) {
     let me = my_id(joined.as_deref());
     if script.pressed("Leave") {
@@ -418,6 +535,31 @@ fn acts(
             Act::Quit => {
                 exit.write(AppExit::Success);
             }
+            Act::Join | Act::Host if knocking.is_some() => {}
+            Act::Join | Act::Host => {
+                let join = (act == Act::Join).then_some(code.0.as_str());
+                if join.is_some_and(|c| c.len() != CODE_LEN) {
+                    line.0 = format!("A lobby code has {CODE_LEN} letters.");
+                    continue;
+                }
+                let door = crate::net::door();
+                match Asking::new(&door, join) {
+                    Ok(asking) => {
+                        line.0 = format!("Asking {door}...");
+                        commands.insert_resource(Knocking(asking));
+                    }
+                    Err(e) => line.0 = e,
+                }
+            }
+            Act::Alone => *mode = Mode::Alone,
+            // Out of the lobby, to the title: off the server, or done alone.
+            Act::Leave => {
+                if let Some(c) = client.as_mut() {
+                    c.disconnect();
+                }
+                line.0.clear();
+                *mode = Mode::Title;
+            }
         }
     }
 }
@@ -426,20 +568,60 @@ fn acts(
 fn typing(
     mut typed: MessageReader<KeyboardInput>,
     me: Option<Single<(), With<LocalPlayer>>>,
+    mode: Res<Mode>,
+    mut code: ResMut<TitleCode>,
     mut settings: ResMut<Settings>,
     mut nav: ResMut<Nav>,
 ) {
+    if *mode == Mode::Title {
+        let rows = TITLE.len() + 1;
+        for k in typed.read().filter(|k| k.state.is_pressed()) {
+            match &k.logical_key {
+                Key::ArrowUp => nav.title = (nav.title + rows - 1) % rows,
+                Key::ArrowDown | Key::Tab => nav.title = (nav.title + 1) % rows,
+                Key::Enter if nav.title == 0 => nav.chosen = Some(Act::Join),
+                Key::Enter => nav.chosen = Some(TITLE[nav.title - 1]),
+                Key::Backspace => {
+                    code.0.pop();
+                }
+                Key::Character(s) => {
+                    for c in s.chars().filter(char::is_ascii_alphabetic) {
+                        if code.0.len() < CODE_LEN {
+                            code.0.push(c.to_ascii_uppercase());
+                        }
+                    }
+                    nav.title = 0;
+                }
+                _ => {}
+            }
+        }
+        return;
+    }
     if me.is_some() {
         typed.clear();
         return;
     }
-    let rows = READY_ROW + 1;
+    let rows = LEAVE_ROW + 1;
     for k in typed.read().filter(|k| k.state.is_pressed()) {
-        match &k.logical_key {
+        // Letters are his name's only while it has the keys; elsewhere W A
+        // S D go about as the arrows do.
+        let name = nav.row == 0;
+        let wasd = match &k.logical_key {
+            Key::Character(c) if !name => c.to_lowercase(),
+            _ => String::new(),
+        };
+        let key = match (&k.logical_key, wasd.as_str()) {
+            (_, "w") => &Key::ArrowUp,
+            (_, "s") => &Key::ArrowDown,
+            (_, "a") => &Key::ArrowLeft,
+            (_, "d") => &Key::ArrowRight,
+            (key, _) => key,
+        };
+        match key {
             Key::ArrowUp => nav.row = (nav.row + rows - 1) % rows,
             Key::ArrowDown | Key::Tab => nav.row = (nav.row + 1) % rows,
             Key::ArrowLeft | Key::ArrowRight => {
-                let right = k.logical_key == Key::ArrowRight;
+                let right = *key == Key::ArrowRight;
                 let step = |i: usize, n: usize| if right { (i + 1) % n } else { (i + n - 1) % n };
                 let look = &mut settings.0;
                 match nav.row {
@@ -455,11 +637,12 @@ fn typing(
                 }
             }
             Key::Enter if nav.row == READY_ROW => nav.chosen = Some(Act::Ready),
+            Key::Enter if nav.row == LEAVE_ROW => nav.chosen = Some(Act::Leave),
             Key::Enter => nav.row += 1,
-            Key::Backspace => {
+            Key::Backspace if name => {
                 settings.0.name.pop();
             }
-            Key::Character(s) => {
+            Key::Character(s) if name => {
                 for c in s
                     .chars()
                     .filter(|c| c.is_alphanumeric() || " -_".contains(*c))
@@ -475,11 +658,14 @@ fn typing(
 }
 
 /// The lobby shows while he has no robber; the Esc menu while it is open.
+#[allow(clippy::type_complexity)]
 fn show(
     me: Option<Single<(), With<LocalPlayer>>>,
     menu: Res<EscMenu>,
-    mut lobby: Single<&mut Visibility, (With<LobbyRoot>, Without<EscRoot>)>,
-    mut esc: Single<&mut Visibility, (With<EscRoot>, Without<LobbyRoot>)>,
+    mode: Res<Mode>,
+    mut lobby: Single<&mut Visibility, (With<LobbyRoot>, Without<EscRoot>, Without<TitleRoot>)>,
+    mut esc: Single<&mut Visibility, (With<EscRoot>, Without<LobbyRoot>, Without<TitleRoot>)>,
+    mut title: Single<&mut Visibility, (With<TitleRoot>, Without<LobbyRoot>, Without<EscRoot>)>,
 ) {
     let vis = |on: bool| {
         if on {
@@ -488,7 +674,8 @@ fn show(
             Visibility::Hidden
         }
     };
-    lobby.set_if_neq(vis(me.is_none()));
+    title.set_if_neq(vis(*mode == Mode::Title));
+    lobby.set_if_neq(vis(*mode != Mode::Title && me.is_none()));
     esc.set_if_neq(vis(me.is_some() && menu.0));
 }
 
@@ -545,6 +732,13 @@ fn crew_list(
         });
 }
 
+/// The title's code field and line, and the lobby's code.
+type Fields<'w, 's> = (
+    Single<'w, 's, &'static Children, With<CodeField>>,
+    Single<'w, 's, Entity, With<TitleStatus>>,
+    Single<'w, 's, Entity, With<CodeLine>>,
+);
+
 /// The name field, the Ready button's word and what the crew waits for.
 #[allow(clippy::too_many_arguments)]
 fn lines(
@@ -555,6 +749,8 @@ fn lines(
     name: Single<&Children, With<NameField>>,
     ready: Single<Entity, With<ReadyLabel>>,
     status: Single<Entity, With<Status>>,
+    (mode, title_code, title_line): (Res<Mode>, Res<TitleCode>, Res<TitleLine>),
+    (field, title_status, code_line): Fields,
     mut texts: Query<&mut Text>,
 ) {
     let me = my_id(joined.as_deref());
@@ -589,6 +785,16 @@ fn lines(
         format!("{ready_n} of {n} ready: the round starts when everyone is.")
     };
     set(*status, line);
+    if let Some(&f) = field.first() {
+        set(f, format!("{}_", title_code.0));
+    }
+    set(*title_status, title_line.0.clone());
+    let lobby = match &*mode {
+        Mode::Online(Some(code)) => format!("LOBBY {code}   give your crew the code"),
+        Mode::Online(None) => "LOBBY".into(),
+        _ => "PLAYING ALONE".into(),
+    };
+    set(*code_line, lobby);
 }
 
 /// The mouse coming onto a button takes the keys there too.
@@ -601,7 +807,14 @@ fn hover(acts: Query<(&Interaction, &Act), Changed<Interaction>>, mut nav: ResMu
             Act::Colour(_) => nav.row = 1,
             Act::Outfit(_) => nav.row = 2,
             Act::Ready => nav.row = READY_ROW,
-            a => nav.item = ESC.iter().position(|e| *e == a).unwrap_or(nav.item),
+            Act::Leave => nav.row = LEAVE_ROW,
+            Act::Join | Act::Host | Act::Alone => {
+                nav.title = 1 + TITLE.iter().position(|t| *t == *act).unwrap_or(0);
+            }
+            a => {
+                nav.item = ESC.iter().position(|e| *e == a).unwrap_or(nav.item);
+                nav.title = 1 + TITLE.iter().position(|t| *t == a).unwrap_or(nav.title - 1);
+            }
         }
     }
 }
@@ -624,10 +837,13 @@ fn buttons(
             Act::Ready => ready,
             _ => false,
         };
+        let on_title = nav.title > 0 && TITLE[nav.title - 1] == *act;
         let focused = match *act {
             Act::Ready => nav.row == READY_ROW,
+            Act::Leave => nav.row == LEAVE_ROW,
             Act::Colour(_) | Act::Outfit(_) => false,
-            a => ESC[nav.item] == a,
+            Act::Join | Act::Host | Act::Alone => on_title,
+            a => ESC[nav.item] == a || on_title,
         };
         let edge = if chosen || focused { TEXT } else { LINE };
         border.set_if_neq(BorderColor::all(colour(edge)));
@@ -643,7 +859,18 @@ fn buttons(
 }
 
 /// The lobby row the keys are on: its heading lit, a mark before it.
-fn headings(nav: Res<Nav>, mut headings: Query<(&Heading, &mut Text, &mut TextColor)>) {
+fn headings(
+    nav: Res<Nav>,
+    mut headings: Query<(&Heading, &mut Text, &mut TextColor), Without<CodeHeading>>,
+    mut code: Single<(&mut Text, &mut TextColor), With<CodeHeading>>,
+) {
+    let on = nav.title == 0;
+    let word = format!("{}LOBBY CODE", if on { "> " } else { "" });
+    if code.0.0 != word {
+        code.0.0 = word;
+    }
+    code.1
+        .set_if_neq(TextColor(colour(if on { TEXT } else { DIM })));
     for (h, mut text, mut tint) in &mut headings {
         let on = nav.row == h.0;
         let word = format!("{}{}", if on { "> " } else { "" }, ROWS[h.0]);

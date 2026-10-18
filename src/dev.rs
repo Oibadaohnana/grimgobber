@@ -7,13 +7,16 @@
 //!   Up Down Left Right at those frames, or press `Roll`, `Torch`, `Crouch`,
 //!   `Inventory`, `Slot1`–`Slot4` or `Smash`, `Throw`, `Fire` or `SetTrap` (a left click), `Use` (E), `Reload`, `NewBank` (F5), `Talk` (T), `Say`, `Ready` (in the lobby), `Menu` (Esc) or `Leave` (back to the lobby) once
 //!   or `Key:ArrowUp` (`ArrowDown`, `ArrowLeft`, `ArrowRight`, `Enter`, `Tab`,
-//!   `Escape`, `Space`): a real key press, as the keyboard sends it
+//!   `Escape`, `Space`, `W`, `A`, `S`, `D`): a real key press, as the keyboard sends it
 //! - `BB_AIM=degrees`: aim there instead of at the pointer (0 east, 90 north)
 //! - `BB_ZOOM=scale`: world units a pixel to start at (else zoomed out all the way)
 //! - `BB_WINDOW=1400x900`: the window's size
 //! - `BB_SPAWN=x,y`: start on that tile
 //! - `BB_WRAITH=x,y`: the wraith starts on that tile (else in its room)
 //! - `BB_NOTES=x,y`: the five notes in a row from that tile east (else about the bank)
+//! - `BB_TITLE=1`: a smoke run starts at the title (else alone, at once);
+//!   `BB_JOIN=CODE` joins that lobby from it, `BB_HOST=1` opens a new one
+//! - `BB_IDLE=seconds`: how long a lobby other than SCARE stays open empty (600)
 //! - `BB_LOBBY=1`: a smoke run stays in the lobby (else it is ready at once)
 //! - `BB_SAY=word`: what the `Say` key in `BB_KEYS` speaks to the wraith
 //! - `BB_SANITY=n`: every robber starts at n% sanity
@@ -192,6 +195,10 @@ fn typed(
             "Tab" => (KeyCode::Tab, Key::Tab),
             "Escape" => (KeyCode::Escape, Key::Escape),
             "Space" => (KeyCode::Space, Key::Space),
+            "W" => (KeyCode::KeyW, Key::Character("w".into())),
+            "A" => (KeyCode::KeyA, Key::Character("a".into())),
+            "S" => (KeyCode::KeyS, Key::Character("s".into())),
+            "D" => (KeyCode::KeyD, Key::Character("d".into())),
             _ => continue,
         };
         send(code, key.clone(), ButtonState::Pressed);

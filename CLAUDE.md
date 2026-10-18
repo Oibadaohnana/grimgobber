@@ -80,7 +80,8 @@ drawing and sound). Then:
 | `src/prompt.rs` | the "E ..." prompt: what E would do offers itself each frame (`Prompt`, cleared in `First`), shown where it says |
 | `src/guns.rs` | pistols: the robber's aimed by `player::gun_line` (bims' carry onto the pointer), fired and reloaded; hitscan `shoot` (`Sight::stops`), tracers, the reticle (`Gunplay`) |
 | `src/sound.rs` | the old game's door and footstep samples (`sounds/*.ogg`, embedded): `Noise` messages and walkers' loops, placed by distance and sight as `audio.js` did |
-| `src/net.rs` | playing together: `--server`/`--connect`, what is replicated (`Seed`, robbers with `Owner`, `Sanity` and `Dead`, door leaves, the `Wraith`), each robber's `Moved` sent up, noises and footprints passed down (`pass_on`) |
+| `src/door.rs` | the front door (`--serve`, UDP 8794 on grim.buggly.de): lobbies by code, each a child `--server PORT --code CODE` on the ports above; SCARE always (restarted), a player's `HOST` a random code, closed once empty `IDLE`; the client's `Asking`, polled per frame |
+| `src/net.rs` | playing together: `Mode` (title, alone, online), connecting at run time (`connect`, after the door's answer in `knock`), going back to the title (`lost`), `--server`/`--connect`, what is replicated (`Seed`, robbers with `Owner`, `Sanity` and `Dead`, door leaves, the `Wraith`), each robber's `Moved` sent up, noises and footprints passed down (`pass_on`) |
 | `src/dev.rs` | the `BB_*` switches for headless runs |
 
 ## Things easy to get wrong
@@ -198,7 +199,14 @@ drawing and sound). Then:
   Other players and the wraith ease to where the server says (`show`).
   A changed component is sent to every player, so don't touch one that
   didn't change (see `swing`). Bump `net::PROTOCOL` when what crosses
-  changes. Test locally: `--server` in the background and two `./hidden
+  changes. Lobbies are processes: one game server is one bank, so the
+  door runs one per lobby, and a client knocks (`Asking`), then connects
+  to the port it is given. A game alone has no server at all. Test the
+  door locally: `grimgobber --serve 9140` in the background (kill its
+  `--server` children after, it does not), then `./hidden ...
+  --door 127.0.0.1:9140` with `BB_JOIN=SCARE` or `BB_HOST=1` (and
+  `BB_IDLE=8` on the door to watch a lobby close). Test one server alone:
+  `--server` in the background and two `./hidden
   ... --connect 127.0.0.1` with `BB_KEYS`.
 - **Doors' state is `doors::Shut`** (the doors texture's bytes, a resource
   the server has too); sight and hearing read it, and the client uploads it

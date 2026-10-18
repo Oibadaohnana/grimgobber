@@ -7,7 +7,7 @@
 
 use crate::map::{Map, tile_centre};
 use crate::movement::TILE;
-use crate::net::{Owner, Seed, client_u64, my_id};
+use crate::net::{Mode, Owner, Seed, client_u64, my_id};
 use crate::paint::{Hex, hex};
 use crate::player::{Dead, Player};
 use crate::render::WorldPart;
@@ -115,9 +115,10 @@ pub struct CrewPlugin;
 
 impl Plugin for CrewPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, alone).add_systems(
+        app.add_systems(
             Update,
-            (looks, readies, leaves, start, finish).run_if(in_state(ClientState::Disconnected)),
+            (alone, looks, readies, leaves, start, finish)
+                .run_if(in_state(ClientState::Disconnected)),
         );
         if crate::drawn(app) {
             app.insert_resource(Settings(load()))
@@ -126,17 +127,28 @@ impl Plugin for CrewPlugin {
     }
 }
 
-/// Alone, the one crewmate is this machine's.
-fn alone(mut commands: Commands) {
-    if let crate::net::Role::Alone = crate::net::role() {
-        commands.spawn((
-            Replicated,
-            Crewmate {
-                id: 0,
-                ready: false,
-                in_round: false,
-            },
-        ));
+/// Playing alone, the one crewmate is this machine's; back at the title,
+/// he goes.
+fn alone(mode: Res<Mode>, crew: Query<(Entity, &Crewmate)>, mut commands: Commands) {
+    if !mode.is_changed() {
+        return;
+    }
+    let mine = crew.iter().find(|c| c.1.id == 0).map(|c| c.0);
+    match (&*mode, mine) {
+        (Mode::Alone, None) => {
+            commands.spawn((
+                Replicated,
+                Crewmate {
+                    id: 0,
+                    ready: false,
+                    in_round: false,
+                },
+            ));
+        }
+        (Mode::Title, Some(e)) => {
+            commands.entity(e).despawn();
+        }
+        _ => {}
     }
 }
 
@@ -151,10 +163,14 @@ fn introduce(
     mut done: Local<bool>,
 ) {
     let me = my_id(joined.as_deref());
-    if *done || !crew.iter().any(|c| c.id == me) {
+    // Again for each lobby joined.
+    if !crew.iter().any(|c| c.id == me) {
+        *done = false;
         return;
     }
-    *done = true;
+    if std::mem::replace(&mut *done, true) {
+        return;
+    }
     set.write(SetLook(settings.0.clone()));
     if crate::dev::smoke_frames().is_some() && crate::dev::env("BB_LOBBY").is_none() {
         ready.write(Ready(true));
