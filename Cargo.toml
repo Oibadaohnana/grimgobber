@@ -2,25 +2,36 @@
 name = "grimgobber"
 version = "0.2.0"
 edition = "2024"
-description = "Bank Bobbery — a top-down heist on foot: bims' movement, a generated bank, ray-traced sight"
+description = "Grimgobber — a top-down co-op ghost hunt in a haunted, generated bank: bims' movement, ray-traced light and sight"
+
+[features]
+# The game as people play it. Off, the binary is a headless server: the same
+# game logic over Bevy's `_api` crates (sprites, meshes, text and UI as plain
+# components), with no wgpu, no window system and no audio to compile or link.
+# `nix build .#grimgobber-server` builds it that way; see flake.nix.
+default = ["client"]
+client = [
+    "bevy/2d_bevy_render",
+    "bevy/ui_bevy_render",
+    "bevy/bevy_audio",
+    "bevy/vorbis",
+    "bevy/bevy_winit",
+    "bevy/default_font",
+    "bevy/wayland",
+    "bevy/x11",
+]
 
 [dependencies]
-# The same Bevy as bims_bevy (0.19), so the two share a cargo cache.
+# The same Bevy as bims_bevy (0.19), so the two share a cargo cache. Only what
+# the headless server needs is here; the rest comes with `client` above.
 bevy = { version = "0.19", default-features = false, features = [
     "default_app",
-    "2d_bevy_render",
-    "bevy_audio",
+    "2d_api",
     "ui_api",
-    "ui_bevy_render",
-    "bevy_winit",
-    "default_font",
     "multi_threaded",
     "png",
     "serialize",
     "std",
-    "vorbis",
-    "wayland",
-    "x11",
 ] }
 bevy_replicon = "0.44"
 bevy_replicon_renet = "0.20"

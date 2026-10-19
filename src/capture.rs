@@ -1,6 +1,6 @@
 //! Catching it, each kind its own way; any other way enrages it
 //! (`Mind::enrage`). A poltergeist, shown, shot `HITS` times within
-//! `HIT_FOR` seconds goes down for `DOWN`, and a robber with a coffer seals
+//! `HIT_FOR` seconds goes down for `DOWN`, and a hunter with a coffer seals
 //! it in with E (`Seal`). A shade, shown, held `BURN` seconds in a UV
 //! lantern's beam (shining while the left button is held, its cone drawn
 //! for all to see) burns away into it. A banshee is netted (trap.rs). Shots
@@ -56,6 +56,7 @@ impl Plugin for CapturePlugin {
                     .and_then(in_state(ClientState::Disconnected)),
             ),
         );
+        #[cfg(feature = "client")]
         if crate::drawn(app) {
             app.add_systems(Startup, beam_look).add_systems(
                 Update,
@@ -81,12 +82,12 @@ fn shots(
     ids: Query<&NetworkId>,
     sight: Res<Sight>,
     shut: Res<Shut>,
-    robbers: Query<Asker, Without<Dead>>,
+    hunters: Query<Asker, Without<Dead>>,
     mut wraiths: Query<(&mut Mind, &mut Wraith)>,
     mut noises: MessageWriter<Noise>,
 ) {
     for FromClient { client_id, message } in asks.read() {
-        let Some((e, p, ..)) = robbers.iter().find(|r| sent_by(*client_id, &ids, r.2, r.3)) else {
+        let Some((e, p, ..)) = hunters.iter().find(|r| sent_by(*client_id, &ids, r.2, r.3)) else {
             continue;
         };
         let (from, at) = (message.from, p.body.pos);
@@ -128,11 +129,11 @@ fn shots(
 fn seal(
     mut asks: MessageReader<FromClient<Seal>>,
     ids: Query<&NetworkId>,
-    robbers: Query<Asker, Without<Dead>>,
+    hunters: Query<Asker, Without<Dead>>,
     mut wraiths: Query<&mut Wraith>,
 ) {
     for FromClient { client_id, .. } in asks.read() {
-        let Some((_, p, .., inv)) = robbers.iter().find(|r| sent_by(*client_id, &ids, r.2, r.3))
+        let Some((_, p, .., inv)) = hunters.iter().find(|r| sent_by(*client_id, &ids, r.2, r.3))
         else {
             continue;
         };
@@ -154,7 +155,7 @@ fn burn(
     time: Res<Time>,
     sight: Res<Sight>,
     shut: Res<Shut>,
-    robbers: Query<(Entity, &Player, &Controls, &Inventory), Without<Dead>>,
+    hunters: Query<(Entity, &Player, &Controls, &Inventory), Without<Dead>>,
     mut wraiths: Query<(&mut Mind, &mut Wraith)>,
 ) {
     let dt = time.delta_secs();
@@ -162,7 +163,7 @@ fn burn(
         if w.caught {
             continue;
         }
-        let lit = robbers.iter().find(|(_, p, c, inv)| {
+        let lit = hunters.iter().find(|(_, p, c, inv)| {
             let b = &p.body;
             let off = w.pos - b.pos;
             w.shown
@@ -198,36 +199,43 @@ fn burn(
     }
 }
 
-/// A lit UV lantern's beam, drawn for the robber holding it.
+/// A lit UV lantern's beam, drawn for the hunter holding it.
 #[derive(Component)]
 struct Beam(Entity);
 
+#[cfg(feature = "client")]
 #[derive(Resource)]
 struct BeamLook(Handle<Mesh>, Handle<ColorMaterial>);
 
+#[cfg(feature = "client")]
 fn beam_look(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     mut commands: Commands,
 ) {
     commands.insert_resource(BeamLook(
-        meshes.add(paint::beam(BEAM)),
+        meshes.add(paint::beam(BEAM, {
+            let mut violet = paint::hex(0x9a6cff).glow(1.4);
+            violet.rgba[3] = 0.3;
+            violet
+        })),
         materials.add(ColorMaterial::default()),
     ));
 }
 
 /// Each lit lantern's beam out to where it stops, or `BURNS` tiles; gone when it goes out.
+#[cfg(feature = "client")]
 fn beams(
     sight: Res<Sight>,
     shut: Res<Shut>,
     look: Res<BeamLook>,
-    robbers: Query<(Entity, &Shown, &Player, &Controls, &Inventory)>,
+    hunters: Query<(Entity, &Shown, &Player, &Controls, &Inventory)>,
     mut drawn: Query<(Entity, &Beam, &mut Transform)>,
     mut commands: Commands,
 ) {
     let lit = |c: &Controls, inv: &Inventory| c.uv && inv.holds(Kind::Lantern);
     for (e, beam, mut t) in &mut drawn {
-        let Some((_, shown, p, ..)) = robbers.get(beam.0).ok().filter(|r| lit(r.3, r.4)) else {
+        let Some((_, shown, p, ..)) = hunters.get(beam.0).ok().filter(|r| lit(r.3, r.4)) else {
             commands.entity(e).despawn();
             continue;
         };
@@ -241,7 +249,7 @@ fn beams(
             .with_rotation(Quat::from_rotation_z(p.body.heading))
             .with_scale(Vec3::splat(len));
     }
-    for (e, .., c, inv) in &robbers {
+    for (e, .., c, inv) in &hunters {
         if lit(c, inv) && !drawn.iter().any(|d| d.1.0 == e) {
             commands.spawn((
                 WorldPart,

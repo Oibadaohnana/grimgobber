@@ -1,5 +1,5 @@
 //! The end of a round won: the server counts, every `EVERY` seconds, the
-//! tile the wraith is on and each living robber's (`Tracks`), and when the
+//! tile the wraith is on and each living hunter's (`Tracks`), and when the
 //! wraith is caught sends the time and both counts (`Ended`). Each player
 //! then sees the end screen: the time, and a heatmap over the bank's plan
 //! of where it went and where they went. It stays, into the lobby, till
@@ -12,6 +12,7 @@ use crate::wraith::{Mind, Wraith};
 use bevy::asset::RenderAssetUsages;
 use bevy::image::ImageSampler;
 use bevy::prelude::*;
+#[cfg(feature = "client")]
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy_replicon::prelude::ClientState;
 use serde::{Deserialize, Serialize};
@@ -21,14 +22,14 @@ const EVERY: f32 = 0.25;
 const PIXELS: f32 = 7.0;
 
 /// The round won: its length, the wraith's name and kind, and the tiles it
-/// and the robbers were counted on.
+/// and the hunters were counted on.
 #[derive(Message, Clone, Serialize, Deserialize)]
 pub struct Ended {
     secs: f32,
     name: String,
     kind: String,
     ghost: Vec<u16>,
-    robbers: Vec<u16>,
+    hunters: Vec<u16>,
 }
 
 /// The server's counts this round, and when it began.
@@ -37,7 +38,7 @@ struct Tracks {
     began: f32,
     next: f32,
     ghost: Vec<u16>,
-    robbers: Vec<u16>,
+    hunters: Vec<u16>,
     sent: bool,
 }
 
@@ -52,6 +53,7 @@ impl Plugin for EndPlugin {
             Update,
             track.run_if(resource_exists::<Bank>.and_then(in_state(ClientState::Disconnected))),
         );
+        #[cfg(feature = "client")]
         if crate::drawn(app) {
             app.add_systems(Update, show).add_systems(
                 PreUpdate,
@@ -69,7 +71,7 @@ fn track(
     bank: Res<Bank>,
     tracks: Option<ResMut<Tracks>>,
     wraiths: Query<(&Wraith, &Mind)>,
-    robbers: Query<&Player, Without<Dead>>,
+    hunters: Query<&Player, Without<Dead>>,
     mut ended: MessageWriter<Ended>,
     mut commands: Commands,
 ) {
@@ -81,7 +83,7 @@ fn track(
             began: now,
             next: now,
             ghost: vec![0; n],
-            robbers: vec![0; n],
+            hunters: vec![0; n],
             sent: false,
         });
         return;
@@ -97,9 +99,9 @@ fn track(
                 t.ghost[i] = t.ghost[i].saturating_add(1);
             }
         }
-        for p in &robbers {
+        for p in &hunters {
             if let Some(i) = index(p.body.pos) {
-                t.robbers[i] = t.robbers[i].saturating_add(1);
+                t.hunters[i] = t.hunters[i].saturating_add(1);
             }
         }
     }
@@ -112,17 +114,18 @@ fn track(
             name: m.true_name().into(),
             kind: format!("{:?}", m.ghost),
             ghost: t.ghost.clone(),
-            robbers: t.robbers.clone(),
+            hunters: t.hunters.clone(),
         });
     }
 }
 
 /// The heatmap: the bank's plan, the wraith's tiles violet over it, the
-/// robbers' orange, each as bright as it was often there (by a log).
+/// hunters' orange, each as bright as it was often there (by a log).
+#[cfg(feature = "client")]
 fn heatmap(bank: &Bank, e: &Ended) -> Image {
     let map = &bank.0;
     let most = |v: &[u16]| ((*v.iter().max().unwrap_or(&0)).max(1) as f32).ln_1p();
-    let (gm, rm) = (most(&e.ghost), most(&e.robbers));
+    let (gm, rm) = (most(&e.ghost), most(&e.hunters));
     let mut data = Vec::with_capacity((map.w * map.h * 4) as usize);
     for row in 0..map.h {
         let y = map.h - 1 - row;
@@ -135,7 +138,7 @@ fn heatmap(bank: &Bank, e: &Ended) -> Image {
                 _ => Vec3::new(0.36, 0.37, 0.42),
             };
             let heat = |v: &[u16], m: f32| (v.get(i).copied().unwrap_or(0) as f32).ln_1p() / m;
-            let (g, r) = (heat(&e.ghost, gm), heat(&e.robbers, rm));
+            let (g, r) = (heat(&e.ghost, gm), heat(&e.hunters, rm));
             let c = base * (1.0 - 0.85 * g.max(r))
                 + Vec3::new(0.72, 0.42, 1.0) * g
                 + Vec3::new(1.0, 0.6, 0.2) * r;
@@ -158,6 +161,7 @@ fn heatmap(bank: &Bank, e: &Ended) -> Image {
     image
 }
 
+#[cfg(feature = "client")]
 fn show(
     mut ended: MessageReader<Ended>,
     bank: Option<Res<Bank>>,

@@ -3,23 +3,36 @@ use crate::map::Map;
 use crate::movement::TILE;
 use crate::paint;
 use crate::smash::Bank;
+#[cfg(feature = "client")]
 use bevy::asset::{RenderAssetUsages, load_internal_asset, uuid_handle};
+#[cfg(feature = "client")]
 use bevy::camera::visibility::RenderLayers;
+#[cfg(feature = "client")]
 use bevy::camera::{Hdr, ImageRenderTarget, RenderTarget, ScalingMode};
+#[cfg(feature = "client")]
 use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
+#[cfg(feature = "client")]
 use bevy::image::{ImageSampler, ImageSamplerDescriptor};
+#[cfg(feature = "client")]
 use bevy::mesh::MeshVertexBufferLayoutRef;
 use bevy::prelude::*;
+#[cfg(feature = "client")]
 use bevy::render::render_resource::{
     AsBindGroup, Extent3d, PipelineCache, RenderPipelineDescriptor, ShaderType,
     SpecializedMeshPipelineError, TextureDimension, TextureFormat,
 };
+#[cfg(feature = "client")]
 use bevy::render::{Render, RenderApp, RenderSystems};
+#[cfg(feature = "client")]
 use bevy::shader::{Shader, ShaderRef};
+#[cfg(feature = "client")]
 use bevy::sprite_render::{AlphaMode2d, Material2d, Material2dKey, Material2dPlugin};
+#[cfg(feature = "client")]
 use std::sync::Arc;
+#[cfg(feature = "client")]
 use std::sync::atomic::{AtomicBool, Ordering};
 
+#[cfg(feature = "client")]
 const WORLD_SHADER: Handle<Shader> = uuid_handle!("3f6c1b2e-8d4a-4e7b-9a51-2c7d0e9b6f41");
 
 /// The most lamps a bank has (95 on 300 seeds).
@@ -27,10 +40,13 @@ pub const MAX_LIGHTS: usize = 128;
 /// As in world.wgsl.
 pub const MAX_TORCHES: usize = 6;
 /// A light map's texels along a tile.
+#[cfg(feature = "client")]
 const BAKED: u32 = 16;
 
+#[cfg(feature = "client")]
 pub struct RenderPlugin;
 
+#[cfg(feature = "client")]
 impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
         load_internal_asset!(app, WORLD_SHADER, "shaders/world.wgsl", Shader::from_wgsl);
@@ -50,13 +66,16 @@ pub struct MainCamera;
 
 /// Draws one light map (0 the ground's, 1 things'): every lamp's light,
 /// shadowed, traced once instead of every frame.
+#[cfg(feature = "client")]
 #[derive(Component)]
 struct Bake(usize);
 
 /// Whether a pipeline is still compiling, so that a bake may have drawn nothing.
+#[cfg(feature = "client")]
 #[derive(Resource, Clone, Default)]
 struct Compiling(Arc<AtomicBool>);
 
+#[cfg(feature = "client")]
 fn note_compiling(cache: Res<PipelineCache>, compiling: Res<Compiling>) {
     let waiting = cache.waiting_pipelines().next().is_some();
     compiling.0.store(waiting, Ordering::Relaxed);
@@ -65,6 +84,7 @@ fn note_compiling(cache: Res<PipelineCache>, compiling: Res<Compiling>) {
 /// Bakes both maps for a new bank, going on a few frames: the light maps'
 /// material may not be ready in the first. For a door moving or a window
 /// smashed, one map a frame, taking turns, so a swing costs half as much.
+#[cfg(feature = "client")]
 fn bake(
     mut cameras: Query<(&mut Camera, Ref<Bake>)>,
     shut: Option<Res<Shut>>,
@@ -103,6 +123,7 @@ fn bake(
     }
 }
 
+#[cfg(feature = "client")]
 #[derive(ShaderType, Clone, Debug)]
 pub struct Params {
     pub eye: Vec4,
@@ -115,6 +136,7 @@ pub struct Params {
     pub lights: [Vec4; 2 * MAX_LIGHTS],
 }
 
+#[cfg(feature = "client")]
 #[derive(Asset, TypePath, AsBindGroup, Clone, Debug)]
 pub struct WorldMaterial {
     #[uniform(0)]
@@ -137,6 +159,7 @@ pub struct WorldMaterial {
     pub blend: bool,
 }
 
+#[cfg(feature = "client")]
 impl Material2d for WorldMaterial {
     fn fragment_shader() -> ShaderRef {
         ShaderRef::Handle(WORLD_SHADER)
@@ -163,6 +186,7 @@ impl Material2d for WorldMaterial {
 #[derive(Component)]
 pub struct WorldPart;
 
+#[cfg(feature = "client")]
 #[derive(Resource, Default)]
 pub struct WorldMaterials {
     pub all: Vec<Handle<WorldMaterial>>,
@@ -176,6 +200,7 @@ pub struct WorldMaterials {
     pub extra: Handle<Image>,
 }
 
+#[cfg(feature = "client")]
 fn grid_image(map: &Map, texel: impl Fn(i32, i32) -> [u8; 4]) -> Image {
     let mut data = Vec::with_capacity((map.w * map.h * 4) as usize);
     for y in 0..map.h {
@@ -198,6 +223,7 @@ fn grid_image(map: &Map, texel: impl Fn(i32, i32) -> [u8; 4]) -> Image {
     image
 }
 
+#[cfg(feature = "client")]
 pub fn spawn_map(
     commands: &mut Commands,
     map: &Map,
@@ -342,6 +368,7 @@ pub fn spawn_map(
     }
 }
 
+#[cfg(feature = "client")]
 fn light_map(map: &Map) -> Image {
     let mut image = Image::new_target_texture(
         map.w as u32 * BAKED,
@@ -354,16 +381,19 @@ fn light_map(map: &Map) -> Image {
     image
 }
 
+#[cfg(feature = "client")]
 pub fn things_material(world_materials: &WorldMaterials) -> Handle<WorldMaterial> {
     world_materials.all[1].clone()
 }
 
+#[cfg(feature = "client")]
 pub fn ghost_material(world_materials: &WorldMaterials) -> Handle<WorldMaterial> {
     world_materials.all[2].clone()
 }
 
 /// `flicker`: lights flickering, centre, reach and how bright now (none: zero).
-/// `torches`: every flashlight on, the same way, the robber's own first.
+/// `torches`: every flashlight on, the same way, the hunter's own first.
+#[cfg(feature = "client")]
 #[allow(clippy::too_many_arguments)]
 pub fn write_params(
     eye: Vec2,

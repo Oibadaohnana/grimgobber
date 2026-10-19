@@ -1,7 +1,7 @@
 //! Coins: in hand, a left click throws one at the pointer, up to `THROW`
 //! tiles, stopping short of anything solid in the way. Landing, it plings,
 //! heard `LOUD` tiles off (on the server, from `Toss`), and it lies on the
-//! floor till the robber picks it up again (E). Only he sees his coins.
+//! floor till the hunter picks it up again (E). Only he sees his coins.
 
 use crate::dev::Script;
 use crate::inventory::{Inventory, Kind};
@@ -10,7 +10,9 @@ use crate::net::{Owner, sent_by};
 use crate::paint;
 use crate::player::{Dead, LocalPlayer};
 use crate::player::{Level, Living, Player, Shown, Swing};
-use crate::render::{MainCamera, WorldMaterials, WorldPart, things_material};
+use crate::render::{MainCamera, WorldPart};
+#[cfg(feature = "client")]
+use crate::render::{WorldMaterials, things_material};
 use crate::sound::{Clip, Noise};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -24,7 +26,7 @@ const LOUD: f32 = 7.0;
 /// Tiles a second through the air, and the shortest flight.
 const SPEED: f32 = 10.0;
 const QUICKEST: f32 = 0.2;
-/// The robber this close to a coin on the floor can pick it up.
+/// The hunter this close to a coin on the floor can pick it up.
 const REACH: f32 = 0.8 * TILE;
 
 #[derive(Component)]
@@ -58,6 +60,7 @@ pub struct ThrowPlugin;
 impl Plugin for ThrowPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Update, tossed.run_if(in_state(ClientState::Disconnected)));
+        #[cfg(feature = "client")]
         if crate::drawn(app) {
             app.add_systems(Startup, spawn).add_systems(
                 Update,
@@ -70,6 +73,7 @@ impl Plugin for ThrowPlugin {
 }
 
 /// The aim's marks, over everything and in any light (not the world's material).
+#[cfg(feature = "client")]
 fn spawn(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -145,6 +149,7 @@ pub fn landing(from: Vec2, to: Vec2, solids: &Solids) -> Vec2 {
     to
 }
 
+#[cfg(feature = "client")]
 #[allow(clippy::too_many_arguments)]
 fn throw(
     mouse: Res<ButtonInput<MouseButton>>,
@@ -222,11 +227,11 @@ type Thrower<'a> = (&'a Player, Option<&'a Owner>, Has<LocalPlayer>);
 fn tossed(
     mut asks: MessageReader<FromClient<Toss>>,
     ids: Query<&NetworkId>,
-    robbers: Query<Thrower, Without<Dead>>,
+    hunters: Query<Thrower, Without<Dead>>,
     mut noises: MessageWriter<Noise>,
 ) {
     for FromClient { client_id, message } in asks.read() {
-        if robbers.iter().any(|r| {
+        if hunters.iter().any(|r| {
             sent_by(*client_id, &ids, r.1, r.2)
                 && r.0.body.pos.distance(message.0) < (THROW + 1.0) * TILE
         }) {

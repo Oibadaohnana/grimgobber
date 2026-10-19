@@ -1,5 +1,5 @@
 //! The ghost trap. In hand, a left click sets it on the floor in front of
-//! the robber (`SetTrap`, to the server), and it turns into its trigger in
+//! the hunter (`SetTrap`, to the server), and it turns into its trigger in
 //! his hand; E by a set one takes it back (`TakeTrap`), the trigger with it.
 //! A left click with the trigger fires every set trap (`Pull`): a blue net
 //! springs out `CATCHES` round each for `NET_TIME`, and a banshee in it
@@ -13,7 +13,9 @@ use crate::movement::TILE;
 use crate::net::{Owner, sent_by};
 use crate::paint;
 use crate::player::{Dead, Level, Living, LocalPlayer, Player};
-use crate::render::{WorldMaterials, WorldPart, things_material};
+use crate::render::WorldPart;
+#[cfg(feature = "client")]
+use crate::render::{WorldMaterials, things_material};
 use crate::wraith::{Ghost, Mind, Wraith};
 use bevy::prelude::*;
 use bevy_replicon::prelude::{ClientState, FromClient, Replicated};
@@ -70,6 +72,7 @@ impl Plugin for TrapPlugin {
                 resource_exists::<Level>.and_then(in_state(ClientState::Disconnected)),
             ),
         );
+        #[cfg(feature = "client")]
         if crate::drawn(app) {
             // Pulled before set: the click that sets it doesn't fire it.
             app.add_systems(Update, ((pull, place).chain(), pick_up, look, net));
@@ -83,11 +86,11 @@ fn set(
     mut asks: MessageReader<FromClient<SetTrap>>,
     ids: Query<&NetworkId>,
     level: Res<Level>,
-    robbers: Query<Asker, Without<Dead>>,
+    hunters: Query<Asker, Without<Dead>>,
     mut commands: Commands,
 ) {
     for FromClient { client_id, message } in asks.read() {
-        let Some((_, p, ..)) = robbers.iter().find(|r| sent_by(*client_id, &ids, r.2, r.3)) else {
+        let Some((_, p, ..)) = hunters.iter().find(|r| sent_by(*client_id, &ids, r.2, r.3)) else {
             continue;
         };
         let pos = p.body.pos;
@@ -107,12 +110,12 @@ fn set(
 fn take(
     mut asks: MessageReader<FromClient<TakeTrap>>,
     ids: Query<&NetworkId>,
-    robbers: Query<Asker, Without<Dead>>,
+    hunters: Query<Asker, Without<Dead>>,
     traps: Query<(Entity, &Trap)>,
     mut commands: Commands,
 ) {
     for FromClient { client_id, .. } in asks.read() {
-        let Some((_, p, ..)) = robbers.iter().find(|r| sent_by(*client_id, &ids, r.2, r.3)) else {
+        let Some((_, p, ..)) = hunters.iter().find(|r| sent_by(*client_id, &ids, r.2, r.3)) else {
             continue;
         };
         if let Some((e, _)) = traps
@@ -129,12 +132,12 @@ fn fire(
     time: Res<Time>,
     mut asks: MessageReader<FromClient<Pull>>,
     ids: Query<&NetworkId>,
-    robbers: Query<Asker, Without<Dead>>,
+    hunters: Query<Asker, Without<Dead>>,
     mut traps: Query<&mut Trap>,
 ) {
     let now = time.elapsed_secs();
     for FromClient { client_id, .. } in asks.read() {
-        let Some((e, ..)) = robbers.iter().find(|r| sent_by(*client_id, &ids, r.2, r.3)) else {
+        let Some((e, ..)) = hunters.iter().find(|r| sent_by(*client_id, &ids, r.2, r.3)) else {
             continue;
         };
         for mut trap in &mut traps {
@@ -152,7 +155,7 @@ fn fire(
 /// once a net, turns on whoever pulled.
 fn catch(
     time: Res<Time>,
-    robbers: Query<&Player>,
+    hunters: Query<&Player>,
     mut traps: Query<&mut Trap>,
     mut wraiths: Query<(&mut Mind, &mut Wraith)>,
 ) {
@@ -171,7 +174,7 @@ fn catch(
             }
             trap.live = None;
             if m.ghost != Ghost::Banshee {
-                let at = robbers.get(by).map_or(trap.at, |p| p.body.pos);
+                let at = hunters.get(by).map_or(trap.at, |p| p.body.pos);
                 m.enrage(&mut w, by, at);
                 continue;
             }
@@ -253,6 +256,7 @@ fn pick_up(
     }
 }
 
+#[cfg(feature = "client")]
 pub fn dress(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,

@@ -110,7 +110,7 @@ impl Room {
     fn mid(&self) -> (i32, i32) {
         ((self.x0 + self.x1) / 2, (self.y0 + self.y1) / 2)
     }
-    fn contains(&self, x: i32, y: i32) -> bool {
+    pub fn contains(&self, x: i32, y: i32) -> bool {
         x >= self.x0 && x <= self.x1 && y >= self.y0 && y <= self.y1
     }
 }
@@ -176,6 +176,9 @@ pub enum PropKind {
     Car,
     Van,
     StreetLamp,
+    /// A wall, the shelf or the cab of the van's hold: unseen, it only stands
+    /// in the way. Not opaque: its pieces would throw their shadows across the roof.
+    VanWall,
     Hydrant,
     Bin,
     Bush,
@@ -259,8 +262,9 @@ fn spec(kind: PropKind) -> Spec {
         Rug | Stanchion | VaultDoor => s(false, 0.0, TILE, false, false),
         Tree => s(false, 18.0, 16.0, true, true),
         Car => s(false, 9.0, 4.0 * TILE - 16.0, true, false),
-        Van => s(false, 5.0, 5.0 * TILE - 12.0, true, true),
+        Van => s(false, 5.0, 5.0 * TILE - 12.0, false, false),
         StreetLamp => s(false, 21.0, 10.0, true, false),
+        VanWall => s(false, 0.0, TILE, true, false),
         Hydrant => s(false, 17.0, 18.0, true, false),
         Bin => s(false, 14.0, 24.0, true, false),
         Bush => s(false, 4.0, 40.0, false, false),
@@ -275,6 +279,8 @@ pub struct Map {
     pub props: Vec<Prop>,
     pub lights: Vec<Light>,
     pub spawn: Vec2,
+    /// The van's hold, inside its walls, where the crew starts.
+    pub van: Option<Aabb>,
     /// x0, y0, x1, y1, walls included.
     pub building: (i32, i32, i32, i32),
 }
@@ -576,6 +582,7 @@ pub fn generate(seed: u64) -> Map {
         props: Vec::new(),
         lights: Vec::new(),
         spawn: Vec2::ZERO,
+        van: None,
         building: (bx0, by0, bx0 + bw - 1, by0 + bh - 1),
     };
     let mut g = Gen {
@@ -1573,8 +1580,17 @@ impl Gen {
             let len = if kind == PropKind::Bench { 2 } else { 1 };
             self.place(kind, x, road + 2, len, 1, SOUTH, NO_ROOM);
         }
-        let vx = entrance + if self.rng.chance(0.5) { 3 } else { -8 };
-        self.place(PropKind::Van, vx, road - 2, 5, 2, EAST, NO_ROOM);
+        // Beside the entrance, its door clear of the street lamps.
+        let sides = if self.rng.chance(0.5) {
+            [3, -8, 4, -9]
+        } else {
+            [-8, 3, -9, 4]
+        };
+        if let Some(vx) = sides.map(|d| entrance + d).into_iter().find(|&vx| {
+            self.free(vx, road - 2, 5, 2, NO_ROOM) && self.free(vx + 2, road, 1, 1, NO_ROOM)
+        }) {
+            self.van(vx, road - 2);
+        }
         let p0 = by1 + 3;
         for (r0, r1) in bay_rows(p0, h) {
             for x in (bx0 - 2..=bx1 + 2 - BAY_WIDE).step_by(BAY_WIDE as usize) {
@@ -1585,6 +1601,48 @@ impl Gen {
             }
         }
         self.map.spawn = tile_centre(entrance, road + 1);
+    }
+}
+
+/// The van's sliding door, in tiles from its back: from, to.
+pub const VAN_DOOR: (f32, f32) = (1.7, 3.3);
+
+impl Gen {
+    /// The crew's van, 5 by 2 tiles, its cab east: a hold behind the cab, a
+    /// sliding door on the bank's side, a shelf at its back. Its walls
+    /// (`VanWall`) each stand on all its tiles, so none is free.
+    fn van(&mut self, x: i32, y: i32) {
+        self.put(PropKind::Van, x, y, 5, 2, EAST, NO_ROOM);
+        let van = self.map.props.last().unwrap();
+        let (block, v) = (van.block, van.body);
+        let at = |k: f32| block.min.x + k * TILE;
+        let wall = 6.0;
+        for (min, max) in [
+            (v.min, vec2(at(1.0), v.max.y)),
+            (vec2(at(4.0), v.min.y), v.max),
+            (vec2(at(1.0), v.min.y), vec2(at(4.0), v.min.y + wall)),
+            (vec2(at(1.0), v.max.y - wall), vec2(at(VAN_DOOR.0), v.max.y)),
+            (vec2(at(VAN_DOOR.1), v.max.y - wall), vec2(at(4.0), v.max.y)),
+        ] {
+            self.map.props.push(Prop {
+                kind: PropKind::VanWall,
+                block,
+                body: Aabb::new(min, max),
+                face: EAST,
+                seed: 0,
+                solid: true,
+                opaque: false,
+                room: NO_ROOM,
+            });
+        }
+        for (x, y) in self.map.tiles_under(block) {
+            let i = self.map.idx(x, y);
+            self.used[i] = true;
+        }
+        self.map.van = Some(Aabb::new(
+            vec2(at(1.0), v.min.y + wall),
+            vec2(at(4.0), v.max.y - wall),
+        ));
     }
 }
 

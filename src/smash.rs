@@ -1,5 +1,5 @@
 //! The crowbar in hand, a left click swings it, and a window right in
-//! front of the robber breaks: an opening with glass on the floor, which
+//! front of the hunter breaks: an opening with glass on the floor, which
 //! sight, walking and paths all take in, and a crash heard from far off.
 
 use crate::dev::Script;
@@ -8,6 +8,7 @@ use crate::map::{Map, Wall, deco, tile_centre, tile_of};
 use crate::movement::TILE;
 use crate::paths::Walkable;
 use crate::player::{Level, Living, Player, Swing};
+#[cfg(feature = "client")]
 use crate::render::WorldMaterials;
 use crate::sight::Sight;
 use crate::sound::{Clip, Noise};
@@ -23,6 +24,7 @@ const LOUD: f32 = 14.0;
 
 pub struct SmashPlugin;
 
+#[cfg(feature = "client")]
 impl Plugin for SmashPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
@@ -32,7 +34,7 @@ impl Plugin for SmashPlugin {
     }
 }
 
-/// The window the robber faces within a crowbar's reach, if any.
+/// The window the hunter faces within a crowbar's reach, if any.
 fn window(map: &Map, pos: Vec2, heading: f32) -> Option<(i32, i32)> {
     let (x0, y0) = tile_of(pos);
     let ahead = Vec2::from_angle(heading);
@@ -45,6 +47,7 @@ fn window(map: &Map, pos: Vec2, heading: f32) -> Option<(i32, i32)> {
         .map(|(x, y, _)| (x, y))
 }
 
+#[cfg(feature = "client")]
 #[allow(clippy::too_many_arguments)]
 fn smash(
     mouse: Res<ButtonInput<MouseButton>>,

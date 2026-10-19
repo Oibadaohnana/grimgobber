@@ -6,7 +6,7 @@
 #import bevy_sprite::mesh2d_vertex_output::VertexOutput
 
 struct Params {
-    eye: vec4<f32>, // the robber xy, the way he faces (cos, sin)
+    eye: vec4<f32>, // the hunter xy, the way he faces (cos, sin)
     map: vec4<f32>, // the map's size in tiles xy, a tile in world units z, torch count w
     misc: vec4<f32>, // mode, lamp count, flashlight on (1/0), crouched (1/0)
     flicker: vec4<f32>, // lights flickering: centre xy, reach z (0: none), how bright now w
@@ -262,7 +262,7 @@ fn cone_of(t: vec4<f32>, w: vec2<f32>) -> f32 {
     return smoothstep(cos(CONE_OUT), cos(CONE_IN), dot(off, t.zw) / max(length(off), 1e-3));
 }
 
-// The robber's own, 0 with it off.
+// The hunter's own, 0 with it off.
 fn beam(w: vec2<f32>) -> f32 {
     return select(0.0, cone_of(P.eye, w), P.misc.z > 0.5);
 }

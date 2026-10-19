@@ -1,4 +1,4 @@
-//! Sanity, per robber, 0 to 100: it drains in the bank's dark rooms (slowly
+//! Sanity, per hunter, 0 to 100: it drains in the bank's dark rooms (slowly
 //! in lit ones, not at all outside) and when the wraith shows itself, and the
 //! lower it is, the likelier a roll of the wraith's comes up a haunt. The
 //! server keeps it; his own shows in a bar beside the quick slots.
@@ -42,6 +42,7 @@ impl Plugin for SanityPlugin {
                     .and_then(in_state(ClientState::Disconnected)),
             ),
         );
+        #[cfg(feature = "client")]
         if crate::drawn(app) {
             app.add_systems(Startup, spawn_bar).add_systems(Update, bar);
         }
@@ -172,10 +173,10 @@ fn drain(
     time: Res<Time>,
     bank: Res<Bank>,
     sight: Res<Sight>,
-    mut robbers: Query<(&Player, &mut Sanity), Without<Dead>>,
+    mut hunters: Query<(&Player, &mut Sanity), Without<Dead>>,
 ) {
     let map = &bank.0;
-    for (p, mut sanity) in &mut robbers {
+    for (p, mut sanity) in &mut hunters {
         let (x, y) = tile_of(p.body.pos);
         if !map.inside(x, y) || !map.at(x, y).indoor || sanity.0 == 0.0 {
             continue;

@@ -1,12 +1,12 @@
 //! `seen` from world.wgsl on the CPU, over the same grids, for whoever looks
-//! at the robber.
+//! at the hunter.
 
 use crate::map::{Map, Wall, tile_of};
 use crate::movement::TILE;
 use bevy::prelude::*;
 use std::collections::BinaryHeap;
 
-/// The robber's sight in tiles, as in world.wgsl: in a lit room or outside, and in a dark one.
+/// The hunter's sight in tiles, as in world.wgsl: in a lit room or outside, and in a dark one.
 pub const VIEW: f32 = 6.0;
 pub const DARK: f32 = 3.75;
 const EYE_SPREAD: f32 = 7.0;
@@ -123,9 +123,9 @@ impl Sight {
             || doors.get(i * 4).is_some_and(|&s| s > 127)
     }
 
-    /// How far the robber sees towards `at`, in tiles, as `seen` in
+    /// How far the hunter sees towards `at`, in tiles, as `seen` in
     /// world.wgsl: by the light there, and in his flashlight's beam as far as in a lit room.
-    pub fn robber_reach(&self, eye: Vec2, heading: f32, torch: bool, at: Vec2) -> f32 {
+    pub fn hunter_reach(&self, eye: Vec2, heading: f32, torch: bool, at: Vec2) -> f32 {
         let ahead = Vec2::from_angle(heading);
         let off = (at - (eye + ahead * LENS_AHEAD)).normalize_or_zero();
         let beam = if torch {
@@ -258,27 +258,28 @@ mod tests {
             props: Vec::new(),
             lights: Vec::new(),
             spawn: Vec2::ZERO,
+            van: None,
             building: (0, 0, 0, 0),
         })
     }
 
     #[test]
-    fn a_car_hides_the_robber_crouched_behind_it() {
+    fn a_car_hides_the_hunter_crouched_behind_it() {
         let map = crate::map::generate(6);
         let sight = Sight::new(&map);
         // A car with nothing else in the way: seen over standing, hidden crouched.
-        let (robber, watcher) = map
+        let (hunter, watcher) = map
             .props
             .iter()
             .filter(|p| p.kind == crate::map::PropKind::Car)
             .map(|p| {
                 let car = p.body;
-                let robber = vec2(car.centre().x, car.max.y + 24.0);
-                (robber, vec2(car.centre().x, car.min.y - 4.0 * TILE))
+                let hunter = vec2(car.centre().x, car.max.y + 24.0);
+                (hunter, vec2(car.centre().x, car.min.y - 4.0 * TILE))
             })
-            .find(|&(robber, watcher)| sight.seen(robber, watcher, 12.0, false, &[]) > 0.5)
+            .find(|&(hunter, watcher)| sight.seen(hunter, watcher, 12.0, false, &[]) > 0.5)
             .expect("a car to look over");
-        assert!(sight.seen(robber, watcher, 12.0, true, &[]) < 0.5);
+        assert!(sight.seen(hunter, watcher, 12.0, true, &[]) < 0.5);
     }
 
     #[test]

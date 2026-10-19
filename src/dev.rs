@@ -21,10 +21,10 @@
 //! - `BB_IDLE=seconds`: how long a lobby other than SCARE stays open empty (600)
 //! - `BB_LOBBY=1`: a smoke run stays in the lobby (else it is ready at once)
 //! - `BB_SAY=word`: what the `Say` key in `BB_KEYS` speaks to the wraith
-//! - `BB_SANITY=n`: every robber starts at n% sanity
+//! - `BB_SANITY=n`: every hunter starts at n% sanity
 //! - `BB_GHOST=Shade`: the wraith's kind (`Poltergeist`, `Shade`, `Banshee`)
 //! - `BB_UNPACED=1`: smoke frames as fast as they go, logging the average fps
-//! - `BB_PLAYERS=n`: n-1 more robbers by the spawn, flashlights on, walking in slow circles
+//! - `BB_PLAYERS=n`: n-1 more hunters by the spawn, flashlights on, walking in slow circles
 
 use crate::map::{Map, tile_centre};
 use crate::movement::TILE;
@@ -33,6 +33,7 @@ use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::input::mouse::MouseButtonInput;
 use bevy::prelude::*;
+#[cfg(feature = "client")]
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
@@ -136,6 +137,7 @@ impl Plugin for DevPlugin {
             .add_systems(First, (count, play_script).chain())
             .add_systems(PreUpdate, bots)
             .add_systems(Last, smoke);
+        #[cfg(feature = "client")]
         if crate::drawn(app) {
             app.add_systems(First, (typed, clicked).after(play_script));
         }
@@ -273,6 +275,8 @@ fn smoke(
         std::thread::sleep(Duration::from_secs_f64(1.0 / 60.0).saturating_sub(at.elapsed()));
     }
     *last = Some(Instant::now());
+    // A server has no window to take a picture of.
+    #[cfg(feature = "client")]
     if frames.0 + 30 == limit
         && let Some(path) = env("BB_SCREENSHOT")
     {

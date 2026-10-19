@@ -1,3 +1,11 @@
+// Without `client` this is the headless server build: everything that only
+// draws, plays sound or reads the window is compiled out (see Cargo.toml).
+// What is left over in a module whose drawing half is gone would only warn.
+#![cfg_attr(
+    not(feature = "client"),
+    allow(dead_code, unused_imports, unused_variables, unused_mut)
+)]
+
 mod capture;
 mod crew;
 mod dev;
@@ -6,6 +14,7 @@ mod doors;
 mod end;
 mod guns;
 mod hearing;
+mod instruments;
 mod inventory;
 mod inventory_ui;
 mod junk;
@@ -34,9 +43,11 @@ mod wraith;
 
 use bevy::app::ScheduleRunnerPlugin;
 use bevy::camera::Hdr;
+#[cfg(feature = "client")]
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::log::LogPlugin;
+#[cfg(feature = "client")]
 use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
@@ -44,8 +55,10 @@ use bevy::window::{PresentMode, WindowMode, WindowResolution};
 use bevy_replicon::prelude::{Remote, Replicated};
 use std::time::Duration;
 
-use crate::player::{Controls, Level, LocalPlayer, Player, PlayerPlugin, spawn_robber};
-use crate::render::{MainCamera, RenderPlugin, WorldMaterial, WorldMaterials, WorldPart};
+use crate::player::{Controls, Level, LocalPlayer, Player, PlayerPlugin, spawn_hunter};
+use crate::render::{MainCamera, WorldPart};
+#[cfg(feature = "client")]
+use crate::render::{RenderPlugin, WorldMaterial, WorldMaterials};
 
 /// The bank to build next, set by the rounds (crew.rs), F5, or the server's seed.
 #[derive(Resource)]
@@ -94,11 +107,19 @@ fn main() {
         ))
         .insert_resource(Headless);
     } else {
+        #[cfg(not(feature = "client"))]
+        {
+            eprintln!("grimgobber: this is the headless server build; it only runs as a server");
+            std::process::exit(2);
+        }
+        #[cfg(feature = "client")]
         let (w, h) = dev::window_size();
+        #[cfg(feature = "client")]
         let smoke = dev::smoke_frames().is_some();
+        #[cfg(feature = "client")]
         app.add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                title: format!("Bank Bobbery {}", net::VERSION),
+                title: format!("Grimgobber {}", net::VERSION),
                 resolution: WindowResolution::new(w, h),
                 present_mode: if smoke {
                     PresentMode::AutoNoVsync
@@ -161,6 +182,7 @@ fn main() {
             end::EndPlugin,
             power::PowerPlugin,
             throw::ThrowPlugin,
+            instruments::InstrumentsPlugin,
             crew::CrewPlugin,
             dev::DevPlugin,
         ))
@@ -193,6 +215,7 @@ fn clock_seed() -> u64 {
         .unwrap_or(1)
 }
 
+#[cfg(feature = "client")]
 fn setup(mut commands: Commands) {
     let scale = dev::env("BB_ZOOM")
         .and_then(|z| z.parse().ok())
@@ -287,7 +310,7 @@ fn clear(
     commands.remove_resource::<power::Switches>();
 }
 
-/// A robber for each crewmate, in his look; who is in it comes from the
+/// A hunter for each crewmate, in his look; who is in it comes from the
 /// server when playing on one.
 fn build_map(
     mut commands: Commands,
@@ -313,10 +336,14 @@ fn build_map(
         commands.insert_resource(paths::Walkable::new(&map));
         wraith::spawn_wraith(&mut commands, &map, seed);
         let spawn = dev::tile("BB_SPAWN").unwrap_or(map.spawn);
-        let starts = crew::starts(&map, spawn, crew.iter().count());
+        let n = crew.iter().count();
+        let starts = match (dev::tile("BB_SPAWN"), map.van) {
+            (None, Some(hold)) => van::starts(hold, n),
+            _ => crew::starts(&map, spawn, n),
+        };
         for ((mut mate, look), at) in crew.iter_mut().zip(starts) {
-            let robber = spawn_robber(&mut commands, at, look.clone());
-            commands.entity(robber).insert(net::Owner(mate.id));
+            let hunter = spawn_hunter(&mut commands, at, look.clone());
+            commands.entity(hunter).insert(net::Owner(mate.id));
             mate.ready = false;
             mate.in_round = true;
         }
@@ -326,7 +353,7 @@ fn build_map(
                 colour: i + 1,
                 outfit: crew::Outfit::ALL[i % 4],
             };
-            let bot = spawn_robber(&mut commands, at, look);
+            let bot = spawn_hunter(&mut commands, at, look);
             commands.entity(bot).insert(dev::Bot(i as f32 * 1.7));
         }
     }
@@ -346,6 +373,7 @@ fn build_map(
     commands.insert_resource(smash::Bank(map));
 }
 
+#[cfg(feature = "client")]
 fn draw_map(
     mut commands: Commands,
     bank: Res<smash::Bank>,
@@ -445,7 +473,7 @@ fn hud(
         _ => String::new(),
     };
     text.0 = format!(
-        "BANK BOBBERY {}   bank #{}  ({} rooms, {} props, {} lamps)   {:.0} fps\n\
+        "GRIMGOBBER {}   bank #{}  ({} rooms, {} props, {} lamps)   {:.0} fps\n\
          WASD walk | mouse aim | Shift sprint | C crouch | Space/Alt roll | F flashlight | Tab inventory | 1-4 quick slots\n\
          E pick up | T speak | P phone | R reload | wheel zoom | Esc menu | F11 full screen\n\
          {mind}{state}   roll {roll}   flashlight {torch}{uv}{pistol}\n\

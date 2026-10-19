@@ -1,6 +1,7 @@
 use crate::crew::Look;
 use crate::dev::Script;
 use crate::guns::Gunplay;
+use crate::instruments::Led;
 use crate::inventory::{Inventory, Kind};
 use crate::map::Map;
 use crate::movement::{
@@ -8,9 +9,9 @@ use crate::movement::{
 };
 use crate::net::Owner;
 use crate::paint;
-use crate::render::{
-    MainCamera, WorldMaterial, WorldMaterials, WorldPart, things_material, write_params,
-};
+use crate::render::{MainCamera, WorldPart};
+#[cfg(feature = "client")]
+use crate::render::{WorldMaterial, WorldMaterials, things_material, write_params};
 use crate::sanity::Sanity;
 use crate::sim::Sim;
 use crate::smash::Bank;
@@ -36,7 +37,7 @@ pub struct LocalPlayer;
 #[derive(Component, Serialize, Deserialize)]
 pub struct Dead;
 
-/// The robber this machine plays, while he lives.
+/// The hunter this machine plays, while he lives.
 pub type Living = (With<LocalPlayer>, Without<Dead>);
 
 #[derive(Resource)]
@@ -175,6 +176,7 @@ impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(Time::<Fixed>::from_seconds(STEP as f64))
             .add_systems(FixedUpdate, step.run_if(resource_exists::<Level>));
+        #[cfg(feature = "client")]
         if crate::drawn(app) {
             app.add_systems(PreUpdate, read_controls.after(crate::talk::talk))
                 .add_systems(Update, (show, animate, follow, zoom).chain());
@@ -182,7 +184,7 @@ impl Plugin for PlayerPlugin {
     }
 }
 
-pub fn spawn_robber(commands: &mut Commands, at: Vec2, look: Look) -> Entity {
+pub fn spawn_hunter(commands: &mut Commands, at: Vec2, look: Look) -> Entity {
     commands
         .spawn((
             WorldPart,
@@ -196,24 +198,31 @@ pub fn spawn_robber(commands: &mut Commands, at: Vec2, look: Look) -> Entity {
 }
 
 /// His picture, fading unless he is the one looking.
+#[cfg(feature = "client")]
 pub fn dress(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     world_materials: Res<WorldMaterials>,
-    robbers: Query<(Entity, &Player, &Look, Has<LocalPlayer>), Added<Player>>,
+    hunters: Query<(Entity, &Player, &Look, Has<LocalPlayer>), Added<Player>>,
 ) {
-    for (robber, player, look, local) in &robbers {
+    for (hunter, player, look, local) in &hunters {
         let at = player.body.pos;
-        let p = paint::robber(!local, look);
+        let p = paint::hunter(!local, look);
         let [foot, knee, arm, glove, crowbar, lamp, lens, streak] = [
             p.foot, p.knee, p.arm, p.glove, p.crowbar, p.lamp, p.lens, p.streak,
         ]
         .map(|m| Mesh2d(meshes.add(m)));
         let coin = Mesh2d(meshes.add(paint::coin()));
         let pistol = Mesh2d(meshes.add(paint::pistol()));
+        let meters =
+            [Kind::Thermometer, Kind::Emf, Kind::Infrared].map(|k| (k, paint::meter(k, !local)));
+        let meters = meters.map(|(k, m)| (k, Mesh2d(meshes.add(m))));
+        let leds: Vec<_> = (0..5)
+            .map(|i| Mesh2d(meshes.add(paint::led(i, !local))))
+            .collect();
         let mat = MeshMaterial2d(things_material(&world_materials));
         commands
-            .entity(robber)
+            .entity(hunter)
             .insert((
                 Shown {
                     pos: at,
@@ -295,6 +304,28 @@ pub fn dress(
                                 mat.clone(),
                                 hand.with_translation(vec3(17.0, 0.0, 0.1)),
                             ));
+                            for (kind, mesh) in &meters {
+                                a.spawn((
+                                    Part::Tool(*kind),
+                                    mesh.clone(),
+                                    mat.clone(),
+                                    hand.with_translation(vec3(15.0, 0.0, 0.1)),
+                                ))
+                                .with_children(|m| {
+                                    if *kind == Kind::Emf {
+                                        for (i, led) in leds.iter().enumerate() {
+                                            m.spawn((
+                                                Led(i as u8 + 1, hunter),
+                                                led.clone(),
+                                                mat.clone(),
+                                                Transform::from_translation(
+                                                    paint::led_at(i).extend(0.01),
+                                                ),
+                                            ));
+                                        }
+                                    }
+                                });
+                            }
                         }
                     });
                 }
@@ -396,7 +427,7 @@ pub fn read_controls(
     }
 }
 
-/// The robbers this machine steps: its own, and the test crew where they live.
+/// The hunters this machine steps: its own, and the test crew where they live.
 type Driven = Or<(With<LocalPlayer>, (Without<Remote>, Without<Owner>))>;
 
 fn step(
@@ -442,7 +473,7 @@ fn show(
     }
 }
 
-type Robber<'a> = (
+type Hunter<'a> = (
     Entity,
     &'a Player,
     &'a Controls,
@@ -455,18 +486,18 @@ type Robber<'a> = (
 
 fn animate(
     time: Res<Time>,
-    mut robbers: Query<Robber, Without<Part>>,
+    mut hunters: Query<Hunter, Without<Part>>,
     children: Query<&Children>,
     mut parts: Query<(&Part, &mut Transform, &mut Visibility), Without<Player>>,
 ) {
-    for robber in &mut robbers {
-        pose(&time, robber, &children, &mut parts);
+    for hunter in &mut hunters {
+        pose(&time, hunter, &children, &mut parts);
     }
 }
 
 fn pose(
     time: &Time,
-    (root, player, controls, inventory, mut shown, mut reach, mut strike, mut t): QueryItem<Robber>,
+    (root, player, controls, inventory, mut shown, mut reach, mut strike, mut t): QueryItem<Hunter>,
     children: &Query<&Children>,
     parts: &mut Query<(&Part, &mut Transform, &mut Visibility), Without<Player>>,
 ) {
@@ -574,9 +605,16 @@ fn pose(
                 // An empty hand hangs by his hip, swung against his step (on
                 // his knee, crouched), unless it goes out to a door.
                 let held = if side < 0 {
-                    [Kind::Crowbar, Kind::Coin, Kind::Pistol]
-                        .iter()
-                        .any(|&k| inventory.holds(k))
+                    [
+                        Kind::Crowbar,
+                        Kind::Coin,
+                        Kind::Pistol,
+                        Kind::Thermometer,
+                        Kind::Emf,
+                        Kind::Infrared,
+                    ]
+                    .iter()
+                    .any(|&k| inventory.holds(k))
                 } else {
                     inventory.holds(Kind::Lantern)
                 };
@@ -667,11 +705,12 @@ fn pose(
 
 type Seen<'a> = (Entity, &'a Shown, &'a Player, &'a Controls, &'a Inventory);
 
+#[cfg(feature = "client")]
 #[allow(clippy::too_many_arguments)]
 fn follow(
     me: Option<Single<Seen, With<LocalPlayer>>>,
     sim: Option<Res<Sim>>,
-    robbers: Query<Seen>,
+    hunters: Query<Seen>,
     mut camera: Query<&mut Transform, (With<MainCamera>, Without<Player>)>,
     wraiths: Query<&Wraith>,
     time: Res<Time>,
@@ -696,7 +735,7 @@ fn follow(
     // His own first, then the nearest, as many as the shader takes.
     let mine = me.map(|m| m.0);
     // Each flashlight, and each UV lantern (its way twice as long, for the shader).
-    let mut lit: Vec<_> = robbers
+    let mut lit: Vec<_> = hunters
         .iter()
         .flat_map(|(e, s, p, c, _)| {
             [(c.torch, 1.0), (c.uv, 2.0)]

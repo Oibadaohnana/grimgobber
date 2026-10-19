@@ -1,4 +1,4 @@
-//! Guns. The robber's pistol, in hand, aims at the pointer as bims' does
+//! Guns. The hunter's pistol, in hand, aims at the pointer as bims' does
 //! (`player::gun_line`), a reticle on it; a left click fires, R reloads from
 //! his rounds. A shot stops at walls, windows, tall things and shut doors,
 //! or at the first body it reaches, and is heard `LOUD` tiles off. The
@@ -20,7 +20,7 @@ const RANGE: f32 = 20.0;
 pub const LOUD: f32 = 26.0;
 /// How near a body's middle a shot must pass to hit it.
 const HIT: f32 = 16.0;
-/// The robber's pistol's state.
+/// The hunter's pistol's state.
 #[derive(Component, Default)]
 pub struct Gunplay {
     /// Seconds of a reload left (0: none), and till the next shot.
@@ -28,6 +28,7 @@ pub struct Gunplay {
     cool: f32,
 }
 
+#[cfg(feature = "client")]
 #[derive(Resource)]
 struct Looks {
     tracer: Handle<Mesh>,
@@ -45,6 +46,7 @@ struct Reticle(bool);
 
 pub struct GunsPlugin;
 
+#[cfg(feature = "client")]
 impl Plugin for GunsPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, spawn).add_systems(
@@ -56,6 +58,7 @@ impl Plugin for GunsPlugin {
     }
 }
 
+#[cfg(feature = "client")]
 fn spawn(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -101,6 +104,7 @@ pub fn shoot(
 }
 
 /// The streak from the muzzle to where it stopped, and the flash.
+#[cfg(feature = "client")]
 fn streak(commands: &mut Commands, looks: &Looks, from: Vec2, to: Vec2) {
     let d = to - from;
     commands.spawn((
@@ -139,7 +143,8 @@ fn holster(
     *was = held;
 }
 
-/// The robber's pistol: R reloads, a left click fires.
+/// The hunter's pistol: R reloads, a left click fires.
+#[cfg(feature = "client")]
 #[allow(clippy::too_many_arguments)]
 fn trigger(
     time: Res<Time>,

@@ -2,7 +2,7 @@
 //! on and off (E, `Flip`), and every lamp on drains a generator nobody sees
 //! (`Generator`, the server's), which slowly recovers. Run dry, its breaker
 //! trips and every lamp in the bank goes out (the street's stay on), till a
-//! robber resets it at the fuse box, on a wall of a room picked at random
+//! hunter resets it at the fuse box, on a wall of a room picked at random
 //! (`Reset`; it only holds once the generator has recovered `HOLDS`). The
 //! server keeps what is on (`Power`, replicated). Every machine follows it in
 //! `Sight` (sight, the wraith's and sanity's dark); a client also in the
@@ -13,7 +13,9 @@ use crate::movement::TILE;
 use crate::net::{Owner, sent_by};
 use crate::paint;
 use crate::player::{Dead, Living, LocalPlayer, Player};
-use crate::render::{WorldMaterial, WorldMaterials, WorldPart, things_material};
+use crate::render::WorldPart;
+#[cfg(feature = "client")]
+use crate::render::{WorldMaterial, WorldMaterials, things_material};
 use crate::rng::Rng;
 use crate::sight::Sight;
 use crate::smash::Bank;
@@ -99,6 +101,7 @@ impl Plugin for PowerPlugin {
             )
                 .chain(),
         );
+        #[cfg(feature = "client")]
         if crate::drawn(app) {
             app.add_systems(
                 Update,
@@ -167,12 +170,12 @@ fn flip(
     mut asks: MessageReader<FromClient<Flip>>,
     ids: Query<&NetworkId>,
     switched: Option<Res<Switches>>,
-    robbers: Query<Asker, Without<Dead>>,
+    hunters: Query<Asker, Without<Dead>>,
     mut power: Single<&mut Power>,
     mut noises: MessageWriter<Noise>,
 ) {
     for FromClient { client_id, message } in asks.read() {
-        let Some((p, ..)) = robbers.iter().find(|r| sent_by(*client_id, &ids, r.1, r.2)) else {
+        let Some((p, ..)) = hunters.iter().find(|r| sent_by(*client_id, &ids, r.1, r.2)) else {
             continue;
         };
         let r = message.0 as usize;
@@ -192,13 +195,13 @@ fn flip(
 fn reset(
     mut asks: MessageReader<FromClient<Reset>>,
     ids: Query<&NetworkId>,
-    robbers: Query<Asker, Without<Dead>>,
+    hunters: Query<Asker, Without<Dead>>,
     generator: Option<Res<Generator>>,
     mut power: Single<&mut Power>,
     mut noises: MessageWriter<Noise>,
 ) {
     for FromClient { client_id, .. } in asks.read() {
-        let Some((p, ..)) = robbers.iter().find(|r| sent_by(*client_id, &ids, r.1, r.2)) else {
+        let Some((p, ..)) = hunters.iter().find(|r| sent_by(*client_id, &ids, r.1, r.2)) else {
             continue;
         };
         if !power.tripped || power.fuse.distance(p.body.pos) >= REACH {
@@ -267,6 +270,7 @@ fn follow(bank: Res<Bank>, power: Option<Single<Ref<Power>>>, mut sight: ResMut<
 
 /// The lamps' power in every world material, and the lit rooms in the
 /// shader's texture.
+#[cfg(feature = "client")]
 fn relight(
     bank: Res<Bank>,
     power: Option<Single<Ref<Power>>>,
@@ -352,6 +356,7 @@ fn offer(
 
 /// The switches and the fuse box drawn (again for each new bank), showing
 /// whether each is on.
+#[cfg(feature = "client")]
 pub fn dress(
     switched: Option<Res<Switches>>,
     power: Option<Single<&Power>>,

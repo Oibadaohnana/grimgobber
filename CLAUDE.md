@@ -1,8 +1,15 @@
-# Working on Bank Bobbery (Rust)
+# Working on Grimgobber (Rust)
 
 A single-crate Bevy 0.19 game (same Bevy as `../bims2_bevy`, so builds can
-run `--offline` from the shared cargo cache). `README.md` covers what the
-game is. This file covers how to work on it.
+run `--offline` from the shared cargo cache): a co-op ghost hunt in a
+haunted, generated bank. `README.md` covers what the game is. This file
+covers how to work on it.
+
+It was forked from the Bank Bobbery remake, `../bankbobbery2` (the JS
+original is `../bankbobbery`), a heist game that is still its own project:
+work on Grimgobber happens here, never there. The players are ghost
+hunters (`Player`, `paint::hunter`), though they still wear the old
+robbers' masks.
 
 ## Code style
 
@@ -25,7 +32,7 @@ drawing and sound). Then:
 - State that others must see lives in a replicated component or crosses
   as a message; never only in a client's resource or local entity.
 - Simulation must run headless: no input, window, assets or GPU in it,
-  and it loops over every robber, never assumes `LocalPlayer`.
+  and it loops over every hunter, never assumes `LocalPlayer`.
 - A client asks, the server decides and replicates: no client-side
   change to shared state that the server never hears of.
 - Bump `net::PROTOCOL` when what crosses changes (and Cargo.toml's
@@ -63,33 +70,34 @@ drawing and sound). Then:
 | --- | --- |
 | `src/movement.rs` | bims' steered walk: `Body`, `Steer`, `Solids`, `Aabb::push_out_round`. Pure arithmetic, stepped at 60 Hz. |
 | `src/map.rs` | the generator: tiles, rooms, props, lamps; `solids()` for movement, `occluders()` for the ray tracer |
-| `src/paint.rs` | `Painter` (vertex-coloured triangles) and every prop's, the robber's, the wraith's (`wraith(t)`, animated) and its footprints' picture |
-| `src/render.rs` | `WorldMaterial`, the grid textures, spawning a map, baking the lamps into the light maps, writing the robber and the flashlights each frame |
+| `src/paint.rs` | `Painter` (vertex-coloured triangles) and every prop's, the hunter's, the wraith's (`wraith(t)`, animated) and its footprints' picture |
+| `src/render.rs` | `WorldMaterial`, the grid textures, spawning a map, baking the lamps into the light maps, writing the hunter and the flashlights each frame |
 | `src/shaders/world.wgsl` | the per-pixel ray tracing (lamp and flashlight shadows), the procedural floors and walls |
 | `src/player.rs` | input → `Controls` (PreUpdate), the body's fixed step (FixedUpdate), the picture blended between steps, camera, zoom |
-| `src/doors.rs` | door leaves (`Map::doors`): pushed open within reach (and `Reach` for his arm), the glass entrance by sensor; how shut each is in `Shut`, uploaded to the doors texture; in a haunt the doors to the outside are slammed and `locked` (replicated, a red lock drawn), solid for the robbers through `Barred` |
+| `src/doors.rs` | door leaves (`Map::doors`): pushed open within reach (and `Reach` for his arm), the glass entrance by sensor; how shut each is in `Shut`, uploaded to the doors texture; in a haunt the doors to the outside are slammed and `locked` (replicated, a red lock drawn), solid for the hunters through `Barred` |
 | `src/wraith.rs` | the wraith: its roaming, its secret name (`Mind`, server only), the notes with its letters (`Note`, read in `read`), its name heard (`hear`), seeing all round and hearing (`notice`), the roll against sanity (`haunt_chance`), its kind and signs (`Ghost`, `Sign`, `Prints`, `Omen`, a haunted door, a flicker, a thrown thing), the haunt (shown, flicker, hunt, the kill: `Dead`), `Mind::enrage`; on clients its picture in a haunt (flat when down, shrinking as it burns or is caught), frost, the footprints, the dead hidden from the living and drawn pale |
 | `src/crew.rs` | the crew and the rounds: `Crewmate` (one a player, replicated) with his `Look` (name, colour, `Outfit`), saved in `~/.config/grimgobber/player.txt` (`Settings`, with the `SoundLevel` every sound is multiplied by, 80% by default); `SetLook`, `Ready`, `Leave` asked of the server; `start` (everyone ready: a new bank) and `finish` (caught, all dead or all left) |
-| `src/menu.rs` | the lobby screen (crew, name typed straight in, colour, outfit, the portrait rendered by its own camera to an image, Ready), the Esc menu (`escape` swallows input while open, so it reads its own keys first; its Volume row turns `SoundLevel` with left and right, a click a step up), both by keys too (`Nav`), names over the robbers he sees |
+| `src/menu.rs` | the lobby screen (crew, name typed straight in, colour, outfit, the portrait rendered by its own camera to an image, Ready), the Esc menu (`escape` swallows input while open, so it reads its own keys first; its Volume row turns `SoundLevel` with left and right, a click a step up), both by keys too (`Nav`), names over the hunters he sees |
 | `src/talk.rs` | T's box: typing swallows every key (`talk`, before `read_controls` and the inventory's input), Enter sends `Say` |
 | `src/trap.rs` | the ghost trap: set with a left click (`SetTrap`), leaving its trigger in hand, taken back with E (`TakeTrap`), kept by the server (`Trap`); the trigger fires every set trap (`Pull`), a banshee's catch, and the blue net (`Net`, on clients, shown when `Trap::shots` changes) |
-| `src/sanity.rs` | `Sanity` per robber (0–100, replicated), drained by the server in the bank's rooms, dark faster; his own in a bar beside the quick slots (green, amber, red, pulsing low) |
-| `src/end.rs` | the end screen: the server counts the tiles the wraith and the living robbers stand on (`Tracks`, every `EVERY`), and on the catch sends `Ended` (time, name, kind, both counts); clients show the time and a heatmap over the bank's plan till closed |
+| `src/sanity.rs` | `Sanity` per hunter (0–100, replicated), drained by the server in the bank's rooms, dark faster; his own in a bar beside the quick slots (green, amber, red, pulsing low) |
+| `src/end.rs` | the end screen: the server counts the tiles the wraith and the living hunters stand on (`Tracks`, every `EVERY`), and on the catch sends `Ended` (time, name, kind, both counts); clients show the time and a heatmap over the bank's plan till closed |
 | `src/paths.rs` | `Walkable`: paths over `Map::free` tiles (a Dijkstra), for the wraith |
-| `src/hearing.rs` | how far the robber's feet carry (`feet`), and the ring showing how far a smash reaches: `Sight::carry` per tile into the `heard` texture (tiles of reach left), which the shader draws a faint ring from where it runs out |
+| `src/hearing.rs` | how far the hunter's feet carry (`feet`), and the ring showing how far a smash reaches: `Sight::carry` per tile into the `heard` texture (tiles of reach left), which the shader draws a faint ring from where it runs out |
 | `src/sight.rs` | the shader's `seen` on the CPU over the same grids and the doors texture's bytes, for the wraith |
 | `src/inventory.rs` | the gear: items (a stack of coins is one, `count`) on cells of one grid (`GRID`) or in the hands, `fits`/`put`/`stow`/`add`/`remove`, quick slots |
 | `src/inventory_ui.rs` | the Tab screen and the quick-slot bar: one mesh rebuilt every frame (a child of the camera, scaled by its zoom, in logical pixels from the window's middle), UI text over it, drag and drop |
 | `src/smash.rs` | the crowbar's left click: the window in front breaks (`Map::smash`), and everything built from the map is rebuilt |
-| `src/throw.rs` | coins: the range ring and landing marker in hand, thrown with a left click (`landing` short of solids), heard on the server (`Toss`), flying, plinging, lying on the floor till the robber picks one up (E) |
+| `src/throw.rs` | coins: the range ring and landing marker in hand, thrown with a left click (`landing` short of solids), heard on the server (`Toss`), flying, plinging, lying on the floor till the hunter picks one up (E) |
 | `src/prompt.rs` | the "E ..." prompt: what E would do offers itself each frame (`Prompt`, cleared in `First`), shown where it says |
-| `src/guns.rs` | pistols: the robber's aimed by `player::gun_line` (bims' carry onto the pointer), fired and reloaded; hitscan `shoot` (`Sight::stops`), tracers, the reticle (`Gunplay`) |
+| `src/guns.rs` | pistols: the hunter's aimed by `player::gun_line` (bims' carry onto the pointer), fired and reloaded; hitscan `shoot` (`Sight::stops`), tracers, the reticle (`Gunplay`) |
 | `src/sound.rs` | the old game's door and footstep samples (`sounds/*.ogg`, embedded): `Noise` messages and walkers' loops, placed by distance and sight as `audio.js` did; the air while there is a bank (`air`): bims' temperate loop outside, a deep reverberant hum inside (`sounds/inside.py`, both -30 LUFS), faded by the `indoor` tile under the camera |
 | `src/door.rs` | the front door (`--serve`, UDP 8794 on grim.buggly.de): lobbies by code, each a child `--server PORT --code CODE` on the ports above; SCARE always (restarted), a player's `HOST` a random code, closed once empty `IDLE`; the client's `Asking`, polled per frame |
-| `src/net.rs` | playing together: `Mode` (title, alone, online), connecting at run time (`connect`, after the door's answer in `knock`), going back to the title (`lost`), `--server`/`--connect`, what is replicated (`Seed`, robbers with `Owner`, `Sanity` and `Dead`, door leaves, the `Wraith`), each robber's `Moved` sent up, noises and footprints passed down (`pass_on`) |
+| `src/net.rs` | playing together: `Mode` (title, alone, online), connecting at run time (`connect`, after the door's answer in `knock`), going back to the title (`lost`), `--server`/`--connect`, what is replicated (`Seed`, hunters with `Owner`, `Sanity` and `Dead`, door leaves, the `Wraith`), each hunter's `Moved` sent up, noises and footprints passed down (`pass_on`) |
 | `src/capture.rs` | the poltergeist shot down (`Shot`, traced again on the server) and sealed (`Seal`, E with a coffer), the shade burned by a UV lantern (`burn`), the wrong tool enraging it |
 | `src/junk.rs` | loose things (`Loose`, replicated) a poltergeist flings, flown and landing on clients |
-| `src/van.rs` | the van's capture tools (`Spots`, every other free tile beside it), E takes one |
+| `src/van.rs` | the van: where the crew starts (`starts`, in `Map::van`, its hold), its roof (hidden while his own hunter is in the hold), the shelf's tools (`TOOLS`), dragged off and back on the Tab screen while in the hold (inventory_ui.rs, `Drag::new`); the hold's walls are `PropKind::VanWall`s, solid but not opaque (opaque, they shadowed the roof) |
+| `src/instruments.rs` | the thermometer (`temperature`: the wraith's room cold, below zero for a frost kind, from `Wraith::home`/`cold`, and chill round it) and the EMF reader (`Emf` traces laid by the server with `trace`: 2 it went by, 3 a door or a throw, 4 a haunt, 5 one time in four from a kind with the EMF 5 sign), read on clients: the dial left of the quick slots, the lit `Led`s in anyone's hand, the beep; the infrared lamp's `Cone` on every hunter and the `Infrared` prints shown in it (`infrared`), sent as `Prints(.., true)` |
 | `src/phone.rs` | P: the signs ticked on and off (keys 1-6 or clicks, swallowed while open) and every kind, crossed out once ruled out, with how each is caught; dragged by anything but its rows, folded to its status bar by a click on it (`Phone::grab` while held, which keeps the lantern dark) |
 | `src/power.rs` | the lights: a switch by each lamped room's door (`Switches`, made and removed with the bank; `Flip`), a generator nobody sees drained by the lamps on (`Generator`, server), the breaker tripping all indoor lamps, reset at a fuse box in a random room (`Reset`); `Power` replicated, followed in `Sight` (everywhere) and in the materials' lamps and the lit-rooms texture (clients) |
 | `src/sim.rs` | `--sim` (`net::Mode::Sim`): a bank with nobody in it, the free camera (`Sim`, panned in `pan`; `follow` leaves it alone and the shader sees everything, `Params::view`), H a hunter at the pointer (`hunter`, the one played moved to him), the wraith's state (`Mind::state`) |
@@ -103,7 +111,7 @@ drawing and sound). Then:
   `movement.rs` pin the feel. Change them only on purpose. `THICK` (half
   pace in a thicket) is ours, not bims'.
 - **An opaque box must lie inside a solid one.** The flashlight's rays start
-  at the robber's hand, so a body inside an opaque box would light nothing.
+  at the hunter's hand, so a body inside an opaque box would light nothing.
   Make every opaque prop solid; a test enforces this.
 - **Sight** (`seen`): three rays from the eyes, blocked by walls and tall
   furniture, within 6 tiles in a lit room or outside and 3.75 in a dark one
@@ -141,7 +149,7 @@ drawing and sound). Then:
   room. Glow can go past white for the bloom.
 - **Noises are messages** (`sound::Noise`): a sample to play, if there is
   one, and `loud`, how many tiles off the wraith hears it. The sound plugin
-  plays them, the wraith listens to the same ones (and to the robbers'
+  plays them, the wraith listens to the same ones (and to the hunters'
   feet), and hearing.rs shows the glass's. How far one reaches is
   `Sight::carry`, a Dijkstra over tiles (a wall or shut door costs
   `THROUGH_WALL` more), the same for the wraith and for the ring drawn.
@@ -158,8 +166,8 @@ drawing and sound). Then:
   (or `use_one`), which keeps the quick slots right.
 - **Sight is written twice**: `seen`/`trace` in world.wgsl and in
   `sight.rs`. Change one, change the other. The wraith's check is traced
-  from the robber to it (sight is mutual), so the crouched cover rule
-  hides the robber from it exactly as it hides it from him.
+  from the hunter to it (sight is mutual), so the crouched cover rule
+  hides the hunter from it exactly as it hides it from him.
 - **Fading vertices** (UV y = 1, `Painter::fades`) take how clearly they
   are seen as alpha: people vanish out of sight instead of showing under
   the fog. Only for things on the blended material.
@@ -182,40 +190,44 @@ drawing and sound). Then:
   script). Both go to the shader as torches (a lantern's way twice as
   long, drawn violet) and both light him for the wraith; only `uv` burns.
   The dead's never shine. Both cross in `Moved`, sent on any change of
-  `Controls` too. The robber's tools are `Part::Tool`, shown while held.
+  `Controls` too. The hunter's tools are `Part::Tool`, shown while held.
 - **Thickets and bushes are hideouts** (`PropKind::is_hideout`): not solid,
   so he walks in, but placed like a solid prop and their tiles kept clear.
   The wraith sees no one through one (`Level::screened`) or in one
   (`Level::hideout`), nor hears his feet there; a hunt that had him as he
   went in follows him in (`Mind::follows`). A noise gives away only a
-  robber within `MADE` of it, not whoever is nearest.
-- **A robber is an entity**: `Player` (his body) with `Controls`,
+  hunter within `MADE` of it, not whoever is nearest.
+- **A hunter is an entity**: `Player` (his body) with `Controls`,
   `Inventory`, `Shown`, `Reach`, `Swing`, `Gunplay` and `Sanity` beside it, so there
   can be several. `LocalPlayer` marks the one this machine plays; input,
   the camera, the shader's eye, the HUD and the ear read only him (a
   `Single`, which skips the system until he exists; `Living` also skips
   it once he is `Dead`). Simulation (steps, doors, the wraith's senses,
-  sanity) runs over every robber. The others are painted fading
-  (`paint::robber(fades)`). `BB_PLAYERS=n` adds a test crew (`dev::Bot`).
+  sanity) runs over every hunter. The others are painted fading
+  (`paint::hunter(fades)`). `BB_PLAYERS=n` adds a test crew (`dev::Bot`).
 - **Every lit flashlight lights the world** (`Params::torches`, up to
-  `MAX_TORCHES` = 6, the robber's own first, count in `map.w`), each with
+  `MAX_TORCHES` = 6, the hunter's own first, count in `map.w`), each with
   its own shadows. Only his own (`eye`, `misc.z`, `beam`) stretches his
   sight. Six at once cost about 12% at 2560×1440.
 - **Simulation and drawing are split** so `grimgobber --server` runs
   headless (`MinimalPlugins`, 60 Hz, no window or GPU). A plugin adds its
-  drawing systems only `if crate::drawn(app)`. `build_map` spawns data only
-  (robbers, the wraith, door leaves, `Shut`, `Level`, `Sight`, `Walkable`);
+  drawing systems only `if crate::drawn(app)`, and that block, the systems
+  in it and anything else that draws, plays sound or reads the window carry
+  `#[cfg(feature = "client")]`: the server is built without the `client`
+  feature (Cargo.toml), so wgpu, winit and audio are not compiled into it.
+  Check both with `cargo check` and `cargo check --no-default-features`. `build_map` spawns data only
+  (hunters, the wraith, door leaves, `Shut`, `Level`, `Sight`, `Walkable`);
   the client's `draw_map` and the `dress` systems (`player`, `wraith`,
   `doors`) add meshes, `Transform` and marks when they appear
   (`Added<..>`), which is also how replicated entities arrive. Smashing
   is client-only for now, and coins are seen only by their thrower.
 - **Networking is server-authoritative but your feet are yours.** The
   server (bevy_replicon over renet, UDP) replicates the wraith, door leaves,
-  every robber and the `Seed`; a client builds the bank from the seed and
-  spawns nobody itself (`net::Joined`). Its own robber (`Owner` = its
+  every hunter and the `Seed`; a client builds the bank from the seed and
+  spawns nobody itself (`net::Joined`). Its own hunter (`Owner` = its
   client id, so `LocalPlayer`) is stepped locally and sent up as `Moved`;
   the receive marker `ours` keeps the server's copy from overwriting it.
-  Only robbers in `player::Driven` are stepped. Authority systems (the
+  Only hunters in `player::Driven` are stepped. Authority systems (the
   wraith's mind, sanity, `swing`, the parked actions) run `in_state(
   ClientState::Disconnected)`, which is the server and a game alone.
   Other players and the wraith ease to where the server says (`show`).
@@ -230,10 +242,10 @@ drawing and sound). Then:
   `BB_IDLE=8` on the door to watch a lobby close). Test one server alone:
   `--server` in the background and two `./hidden
   ... --connect 127.0.0.1` with `BB_KEYS`.
-- **Robbers walk against `doors::Barred` when it is `Some`** (while any
+- **Hunters walk against `doors::Barred` when it is `Some`** (while any
   door is locked: the map's solids and the locked doorways), else
   `Level::solids`. It is rebuilt from the replicated `Leaf::locked` on
-  every machine, since each steps its own robber; the wraith ignores it.
+  every machine, since each steps its own hunter; the wraith ignores it.
 - **Doors' state is `doors::Shut`** (the doors texture's bytes, a resource
   the server has too); sight and hearing read it, and the client uploads it
   to the texture when it changes.
@@ -245,10 +257,10 @@ drawing and sound). Then:
   chained tuple with such a condition needs `distributive_run_if`: a chain
   flushes commands between its systems, so a resource checked at its
   start can be gone by its end.
-- **Rounds start in the lobby.** The game begins with no bank; a robber is
+- **Rounds start in the lobby.** The game begins with no bank; a hunter is
   made per `Crewmate` when every one is ready (`build_map`, in his `Look`,
   `Owner` his id, 0 alone; `net::mine` makes this machine's `LocalPlayer`).
-  The lobby shows whenever this machine has no robber. A smoke run readies
+  The lobby shows whenever this machine has no hunter. A smoke run readies
   itself, so the commands here go straight into a bank; `BB_LOBBY=1` keeps
   it in the lobby (with `Ready` in `BB_KEYS` to start, `Leave` to go back,
   `Menu` for the Esc menu, `Key:ArrowDown`, `Key:Enter` and the like for
@@ -265,7 +277,7 @@ drawing and sound). Then:
   The wraith passes through them shut; it swings one only as a sign
   (`Leaf::haunt`: open with nobody there, then slammed).
 - **The wraith rolls, it does not choose.** Seeing or hearing a living
-  robber (`notice`), it rolls against his `Sanity` (`haunt_chance`: 3%
+  hunter (`notice`), it rolls against his `Sanity` (`haunt_chance`: 3%
   sane, 53% at none), at most every `ROLL_EACH` for him and `ROLL_GAP` for
   anyone, and no haunt within `RESPITE` of the last. No haunt: a sign he
   can see (footprints, a door, a flicker), which costs whoever sees it
@@ -277,8 +289,11 @@ drawing and sound). Then:
   `BB_WRAITH` next to `BB_SPAWN`.
 - **Catching it is the round's goal.** It is one of three kinds
   (`wraith::Ghost`, from the seed, `BB_GHOST` to choose), kept in `Mind`
-  with its name; each shows three of six signs (`Ghost::signs`: footprints,
-  a door, flicker, thrown things, frost, a wail; one its own, two shared), so
+  with its name; each shows three of six signs (`Ghost::signs`: EMF 5,
+  infrared prints, flicker, thrown things, frost, a wail; one its own, two
+  shared; footprints at him and a slammed door any kind shows, so they are
+  no sign; EMF 5 and infrared prints are only read: a trace that reads 5,
+  `touched`, and the trail `tread` leaves), so
   three signs name it (a test pins this) and the phone (P) ticks them. Each
   is caught its own way, and any other way enrages it (`Mind::enrage`, a
   hunt at once): a poltergeist shot `HITS` times while shown goes down
@@ -286,8 +301,8 @@ drawing and sound). Then:
   `BURN` seconds in a UV lantern's beam (shining while the left button is
   held, drawn as a cone by `capture::beams`) burns away; a banshee within
   `CATCHES` of a trap while its net is out (`NET_TIME` after the pull: a
-  hunt crosses the reach in under half a second) is netted. The tools lie
-  by the van (van.rs). A banshee goes to noises it hears, so coins lure it.
+  hunt crosses the reach in under half a second) is netted. The tools are
+  on the van's shelf (van.rs). A banshee goes to noises it hears, so coins lure it.
   Its name (`NAMES`) lies in letters on `Note`s with their places, so the
   crew knows it once all are found (`Wraith::name`) and T's box starts
   with it; spoken, it forces a `NAMED_HUNT` haunt at the speaker, a wrong

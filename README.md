@@ -1,9 +1,16 @@
-# Bank Bobbery (Rust + Bevy)
+# Grimgobber (Rust + Bevy)
 
-A top-down heist on foot, at night, in a bank nobody has built before. This
-is the start of a Rust/Bevy remake of `../bankbobbery`, turning into a
-Phasmophobia-like heist: the bank is haunted, and the dark and what you
-see in it wear down your sanity.
+A top-down co-op ghost hunt for up to 6 players, at night, in a haunted
+bank nobody has built before. Read its signs to learn what kind of wraith
+it is, find the notes that spell its name, and catch it the one way its
+kind can be caught, before the dark wears your sanity down and it comes
+for you.
+
+Grimgobber grew out of the Bank Bobbery remake (`../bankbobbery2`, itself
+a remake of the JS heist `../bankbobbery`) and kept its walk, its
+generated bank and its ray-traced light and sight. It is its own game now:
+there is nothing to rob. The ghost hunters still wear the old robbers'
+clothes for now.
 
 - **Movement** is bims_bevy's steered walk, ported number for number
   (`src/movement.rs`). WASD walk, the mouse aims (the body faces the pointer
@@ -17,7 +24,7 @@ see in it wear down your sanity.
   dead. Lone corners are rounded, so you slide round door frames instead of
   snagging on them.
 - **The bank is generated** from a seed (`src/map.rs`). It sits on a city
-  block: a road with the getaway van at the kerb, a pavement, a car park
+  block: a road with the crew's van at the kerb, a pavement, a car park
   and trees. Inside are a marble lobby with pillars, a queue and the teller
   counter, a corridor with a side door, and back rooms split by a BSP:
   open-plan office, manager, break room, washrooms, server room, security,
@@ -25,19 +32,19 @@ see in it wear down your sanity.
   every room can be reached.
 - **Light is ray traced per pixel** (`src/shaders/world.wgsl`). Rays go
   through the tile grid to each lamp in reach, and the walls and tall
-  furniture (cabinets, shelves, racks, pillars, the van, trees) cast exact
+  furniture (cabinets, shelves, racks, pillars, trees) cast exact
   shadows away from that lamp. The lamps stand still, so their light is
-  traced once into a light map, again only when a door moves. The robber's
+  traced once into a light map, again only when a door moves. The hunter's
   **flashlight** is a light like any other: a cone from his shoulder, 15 tiles
   long, with a soft edge, throwing shadows away from him. With it off he
   throws none. Glass lets light through.
-- **Sight is ray traced too.** You see only what the robber could see:
+- **Sight is ray traced too.** You see only what the hunter could see:
   walls and tall furniture block it, glass doesn't. You see 6 tiles into a
   room with its lights on (and outside), 3.75 into a dark one. Inside the
   flashlight's beam you see the full 6 tiles, as in a lit room. You can
   zoom out only as far as you can see. Anything
   out of sight is drawn under a grey-blue fog.
-- **Doors** open as you reach them, half a tile off: the robber puts his
+- **Doors** open as you reach them, half a tile off: the hunter puts his
   arm out and pushes, the door swings away from him, and it swings shut
   behind him with a flick of his hand. The glass entrance opens on a sensor
   instead, from further off. Shut, they stop sight and lamplight like a wall (the
@@ -58,7 +65,7 @@ see in it wear down your sanity.
   sees nobody through one or in one, and your feet are silent there. Only
   a hunt that had you as you went in follows you in; a noise you make
   (a shot) still gives you away.
-- **Sanity.** Each robber starts at 100% (a bar beside the quick slots shows it). It drains in
+- **Sanity.** Each hunter starts at 100% (a bar beside the quick slots shows it). It drains in
   the bank's rooms, 0.25% a second in a dark one and 0.05% in a lit one
   (outside, not at all), and a sign of the wraith you see costs 5%, being
   near as a haunt starts 15%.
@@ -72,21 +79,40 @@ see in it wear down your sanity.
   the bank: where it went (violet) and where the crew went (orange).
   Enter, Esc or a click closes it.
 - **What is it?** The wraith is a **poltergeist**, a **shade** or a
-  **banshee**, and each shows three signs of six: footprints, a door
-  slammed, flickering lights, things thrown, frost on the floor, a wail.
+  **banshee**, and each shows three signs of six: EMF 5, prints in
+  infrared, flickering lights, things thrown, frost on the floor, a wail.
+  Footprints walking at you and slammed doors come from any of them, so
+  they tell you nothing.
   Tick what you see on the **phone (P)**; it says which kinds are left.
-  Each is caught its own way, with tools from the **van** on the street (E
-  by one): shoot a poltergeist three times while it shows itself, and while
+  Each is caught its own way, with tools from the **van**'s shelf: shoot a poltergeist three times while it shows itself, and while
   it lies still, E seals it in a **coffer**; hold a **UV lantern**'s beam
   (the left button held) on a shade for 3 seconds while it shows itself; net a banshee with the
   **ghost trap** (set with a left click, its **trigger** left in your hand,
   a left click fires a blue net 1.5 tiles round every set trap, which
   takes a banshee that comes into it while it is out; E takes the trap back). A banshee goes to noises, so a thrown coin lures it. The
   wrong tool enrages any of them: a hunt straight at you.
+- **The van.** The crew starts in the hold of their van at the kerb, its
+  roof off while you are inside, a sliding door on the bank's side. Tab
+  in the hold opens the **van shelf** beside your inventory: drag a tool
+  off it to take it (one of each), drag it back to put it away. The
+  wraith cannot get in, and sanity does not drain there.
+- **Instruments**, from the van. The **thermometer** finds its room: the
+  bank's rooms read about 20 °C, the street 8, its own room only a few
+  degrees, below zero if it is a kind that leaves frost, and the air chills
+  round it wherever it goes. The reading settles slowly. The **EMF reader**
+  finds where it has been: where it goes by it reads 2, where it slammed a
+  door or threw a thing 3, where a haunt began 4, for 25 seconds, within a
+  tile and a half (one less up to three). Its lights show in whoever holds
+  it, and it beeps faster the higher it reads. A poltergeist's or a
+  banshee's touch reads 5 one time in four: that is the sign EMF 5. The
+  **infrared lamp** shines a dark red beam 5 tiles while in hand: a
+  poltergeist or a shade leaves prints wherever it walks, for a minute,
+  seen only in that beam. It lights nothing else, and the wraith does not
+  see it.
 - **The wraith** haunts the bank, unseen, keeping to its room and now and
   then wandering out of it. It sees all round (8 tiles where you are lit, by a lamp or your
-  flashlight, 4 in the dark) and hears what the robber does. Each time it
-  notices a robber (at most every 10 seconds for him, every 4 for anyone),
+  flashlight, 4 in the dark) and hears what the hunter does. Each time it
+  notices a hunter (at most every 10 seconds for him, every 4 for anyone),
   it rolls against his sanity: a haunt at 3% sane, 53% at none.
   - **No haunt: a sign** he can see. Pale footprints walk towards him one
     by one; or a door near him swings open with nobody there and slams; or
@@ -145,7 +171,7 @@ see in it wear down your sanity.
   quieter with distance and quieter still through a wall. The wraith has
   no sounds of its own yet.
 - **All the graphics are its own.** Floors and walls are painted
-  procedurally in the shader. The furniture and the robber (striped shirt,
+  procedurally in the shader. The furniture and the hunter (striped shirt,
   beanie, mask, swag bag, crowbar) and the wraith are vertex-coloured
   meshes built in
   code (`src/paint.rs`). There are no image assets; the sounds
@@ -193,13 +219,13 @@ cargo run -- --connect 192.168.1.5:9000       # straight into it
 ```
 
 The server runs the wraith, everyone's sanity and the doors, and says who
-is where; your own robber moves on your machine at once. Online, the
+is where; your own hunter moves on your machine at once. Online, the
 crowbar, coins and the pistol do nothing yet.
 
 ### The lobby
 
 The game opens in a lobby: the crew, and your name (just type), colour and
-outfit (stripes, hoodie, suit or tracksuit), with your robber as he will
+outfit (stripes, hoodie, suit or tracksuit), with your hunter as he will
 look; they are kept in `~/.config/grimgobber/player.txt`. When everyone is
 ready (alone, Start), a new bank. Up and down (or Tab) move between the
 rows, left and right change the colour or outfit, Enter starts. **Esc** in
@@ -209,14 +235,14 @@ kept with your look),
 Back to the lobby (you leave the round; the others play on) and Quit. A
 round ends when the wraith is caught, when everyone in it is dead, or when
 everyone has gone back to the lobby; then it's the lobby again, and a new
-bank when all are ready. Over the other robbers you see their names.
+bank when all are ready. Over the other hunters you see their names.
 
 Inside the game: **Tab** opens the inventory, **1-4** are the quick slots,
-**E** picks up a coin, takes back a trap (its trigger with it), takes a tool at the van or seals a downed poltergeist, **P** opens the phone, **T** speaks to the wraith
+**E** picks up a coin, takes back a trap (its trigger with it) or seals a downed poltergeist, **P** opens the phone, **T** speaks to the wraith
 (once its five letters are found), **F** switches the backpack's flashlight on and off,
 **R** reloads the pistol in hand, **Esc** opens the menu, **F5** builds a
 new bank (alone), the **mouse wheel** zooms (it starts out as far as it goes,
-6.5 tiles above and below the robber), and **F11** toggles full screen.
+6.5 tiles above and below the hunter), and **F11** toggles full screen.
 
 `cargo test` checks the movement's feel against bims' numbers. It also
 checks that on 60 seeds every room is reachable, that the same seed always

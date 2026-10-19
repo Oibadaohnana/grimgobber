@@ -1,7 +1,7 @@
 //! The crew: who plays (`Crewmate`, one a player, kept by the server and
 //! seen by all) and how each looks (`Look`, chosen in the lobby and kept in
 //! `~/.config/grimgobber/player.txt`). And the rounds: when every crewmate
-//! is ready the server builds a new bank with a robber for each, wearing his
+//! is ready the server builds a new bank with a hunter for each, wearing his
 //! look; a round ends when the wraith is caught, everyone in it is dead, or
 //! everyone has gone back to the lobby (`Leave`).
 
@@ -60,7 +60,7 @@ impl Outfit {
     }
 }
 
-/// How a robber looks: on his crewmate in the lobby, and on him in the bank.
+/// How a hunter looks: on his crewmate in the lobby, and on him in the bank.
 #[derive(Component, Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub struct Look {
     pub name: String,
@@ -71,7 +71,7 @@ pub struct Look {
 impl Default for Look {
     fn default() -> Self {
         Look {
-            name: "Robber".into(),
+            name: "Hunter".into(),
             colour: 0,
             outfit: Outfit::Stripes,
         }
@@ -132,6 +132,7 @@ impl Plugin for CrewPlugin {
             )
                 .run_if(in_state(ClientState::Disconnected)),
         );
+        #[cfg(feature = "client")]
         if crate::drawn(app) {
             let (look, level) = load();
             app.insert_resource(Settings(look))
@@ -228,17 +229,17 @@ fn readies(
     }
 }
 
-/// Back to the lobby: his robber goes, the round goes on without him.
+/// Back to the lobby: his hunter goes, the round goes on without him.
 fn leaves(
     mut asks: MessageReader<FromClient<Leave>>,
     ids: Query<&NetworkId>,
     mut crew: Query<(&mut Crewmate, &mut Look)>,
-    robbers: Query<(Entity, &Owner), With<Player>>,
+    hunters: Query<(Entity, &Owner), With<Player>>,
     mut commands: Commands,
 ) {
     for FromClient { client_id, .. } in asks.read() {
         let id = client_u64(*client_id, &ids);
-        for (e, owner) in &robbers {
+        for (e, owner) in &hunters {
             if owner.0 == id {
                 commands.entity(e).despawn();
             }
@@ -274,7 +275,7 @@ fn finish(
     time: Res<Time>,
     seeds: Query<(), With<Seed>>,
     wraiths: Query<&Wraith>,
-    robbers: Query<Has<Dead>, (With<Player>, With<Owner>)>,
+    hunters: Query<Has<Dead>, (With<Player>, With<Owner>)>,
     parts: Query<Entity, With<WorldPart>>,
     mut crew: Query<&mut Crewmate>,
     mut ending: Local<f32>,
@@ -285,8 +286,8 @@ fn finish(
         return;
     }
     let caught = wraiths.iter().any(|w| w.caught);
-    let all_dead = !robbers.is_empty() && robbers.iter().all(|dead| dead);
-    let over = if robbers.is_empty() {
+    let all_dead = !hunters.is_empty() && hunters.iter().all(|dead| dead);
+    let over = if hunters.is_empty() {
         true
     } else if caught || all_dead {
         *ending += time.delta_secs();
@@ -308,7 +309,7 @@ fn finish(
     }
 }
 
-/// Where a round's robbers start: free tiles nearest `spawn`, a tile apart.
+/// Where a round's hunters start: free tiles nearest `spawn`, a tile apart.
 pub fn starts(map: &Map, spawn: Vec2, n: usize) -> Vec<Vec2> {
     let free = map.free();
     let mut tiles: Vec<Vec2> = (0..map.h)

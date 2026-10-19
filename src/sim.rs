@@ -10,7 +10,7 @@ use crate::crew::{Look, Settings};
 use crate::dev::Script;
 use crate::inventory::{Inventory, Kind};
 use crate::net::{Owner, Seed};
-use crate::player::{Controls, Level, LocalPlayer, read_controls, spawn_robber};
+use crate::player::{Controls, Level, LocalPlayer, read_controls, spawn_hunter};
 use crate::render::MainCamera;
 use crate::smash::Bank;
 use crate::wraith::{Mind, Wraith};
@@ -138,12 +138,19 @@ fn hunter(
         ..settings.0.clone()
     };
     let mut gear = Inventory::default();
-    for kind in [Kind::Trap, Kind::Lantern, Kind::Coffer] {
+    for kind in [
+        Kind::Trap,
+        Kind::Lantern,
+        Kind::Coffer,
+        Kind::Thermometer,
+        Kind::Emf,
+        Kind::Infrared,
+    ] {
         gear.add(kind, 1, None);
     }
     let find = |kind| gear.items.iter().position(|i| i.kind == kind);
     gear.quick = [Kind::Pistol, Kind::Trap, Kind::Lantern, Kind::Coin].map(find);
-    let e = spawn_robber(&mut commands, at, look);
+    let e = spawn_hunter(&mut commands, at, look);
     // Ours, so `net::mine` makes him this machine's.
     commands.entity(e).insert((Owner(0), gear));
     sim.free = false;

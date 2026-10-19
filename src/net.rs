@@ -1,6 +1,6 @@
 //! Playing together. `--server` hosts on UDP `PORT`; `--connect host[:port]`
 //! joins. The server runs the bank (the wraith, the doors, who is where) and
-//! replicates it; each player's robber moves on his own machine and is sent
+//! replicates it; each player's hunter moves on his own machine and is sent
 //! up every step, so his own feet never wait for the line.
 
 use crate::capture::{Seal, Shot};
@@ -8,6 +8,7 @@ use crate::crew::{Crewmate, Leave, Look, Ready, SetLook};
 use crate::door::{Answer, Asking, FIRST, IDLE};
 use crate::doors::Leaf;
 use crate::end::Ended;
+use crate::instruments::Emf;
 use crate::inventory::Inventory;
 use crate::junk::Loose;
 use crate::movement::Body;
@@ -39,7 +40,7 @@ use std::time::SystemTime;
 
 pub const PORT: u16 = 8794;
 /// Bump when what crosses the line changes: older builds are refused.
-pub const PROTOCOL: u64 = 12;
+pub const PROTOCOL: u64 = 13;
 /// The game's version (Cargo.toml's), and the protocol it speaks.
 pub const VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"));
 const MAX_PLAYERS: usize = 6;
@@ -48,7 +49,7 @@ const MAX_PLAYERS: usize = 6;
 #[derive(Component, Serialize, Deserialize)]
 pub struct Seed(pub u64);
 
-/// The client a robber is played from.
+/// The client a hunter is played from.
 #[derive(Component, Serialize, Deserialize)]
 pub struct Owner(pub u64);
 
@@ -56,7 +57,7 @@ pub struct Owner(pub u64);
 #[derive(Resource)]
 pub struct Joined(u64);
 
-/// A robber's state after his step, sent up by his player.
+/// A hunter's state after his step, sent up by his player.
 #[derive(Message, Serialize, Deserialize)]
 struct Moved {
     body: Body,
@@ -165,6 +166,7 @@ impl Plugin for NetPlugin {
             .replicate::<Note>()
             .replicate::<Trap>()
             .replicate::<Loose>()
+            .replicate::<Emf>()
             .replicate::<Power>()
             .replicate::<Crewmate>()
             .replicate::<Look>()
@@ -225,7 +227,7 @@ impl Plugin for NetPlugin {
     }
 }
 
-/// The server's word on his own robber is taken only to make him: after
+/// The server's word on his own hunter is taken only to make him: after
 /// that, his player's machine knows better.
 fn ours<C: Component<Mutability = Mutable>>(
     ctx: &mut WriteCtx,
@@ -397,7 +399,7 @@ fn join(add: On<Add, NetworkId>, ids: Query<&NetworkId>, mut commands: Commands)
 fn leave(
     remove: On<Remove, NetworkId>,
     ids: Query<&NetworkId>,
-    robbers: Query<(Entity, &Owner)>,
+    hunters: Query<(Entity, &Owner)>,
     crew: Query<(Entity, &Crewmate)>,
     mut commands: Commands,
 ) {
@@ -405,13 +407,13 @@ fn leave(
         return;
     };
     info!("player {} left", id.get());
-    let mine = robbers.iter().filter(|r| r.1.0 == id.get()).map(|r| r.0);
+    let mine = hunters.iter().filter(|r| r.1.0 == id.get()).map(|r| r.0);
     for e in mine.chain(crew.iter().filter(|c| c.1.id == id.get()).map(|c| c.0)) {
         commands.entity(e).despawn();
     }
 }
 
-/// The robber made for this machine's crewmate is the one played here.
+/// The hunter made for this machine's crewmate is the one played here.
 fn mine(
     add: On<Add, Owner>,
     owners: Query<&Owner>,
@@ -441,7 +443,7 @@ fn id_of(client: ClientId, ids: &Query<&NetworkId>) -> Option<u64> {
     Some(ids.get(client.entity()?).ok()?.get())
 }
 
-/// Whether a robber is the one a message came from: alone, the one played here.
+/// Whether a hunter is the one a message came from: alone, the one played here.
 pub fn sent_by(
     client: ClientId,
     ids: &Query<&NetworkId>,
@@ -457,11 +459,11 @@ pub fn sent_by(
 fn moved(
     mut moves: MessageReader<FromClient<Moved>>,
     ids: Query<&NetworkId>,
-    mut robbers: Query<(&Owner, &mut Player, &mut Controls)>,
+    mut hunters: Query<(&Owner, &mut Player, &mut Controls)>,
 ) {
     for FromClient { client_id, message } in moves.read() {
         let id = id_of(*client_id, &ids);
-        for (_, mut player, mut controls) in robbers.iter_mut().filter(|r| Some(r.0.0) == id) {
+        for (_, mut player, mut controls) in hunters.iter_mut().filter(|r| Some(r.0.0) == id) {
             player.body = message.body.clone();
             controls.torch = message.torch;
             controls.uv = message.uv;
@@ -472,11 +474,11 @@ fn moved(
 fn packed(
     mut packs: MessageReader<FromClient<Packed>>,
     ids: Query<&NetworkId>,
-    mut robbers: Query<(&Owner, &mut Inventory)>,
+    mut hunters: Query<(&Owner, &mut Inventory)>,
 ) {
     for FromClient { client_id, message } in packs.read() {
         let id = id_of(*client_id, &ids);
-        for (_, mut inventory) in robbers.iter_mut().filter(|r| Some(r.0.0) == id) {
+        for (_, mut inventory) in hunters.iter_mut().filter(|r| Some(r.0.0) == id) {
             *inventory = message.0.clone();
         }
     }

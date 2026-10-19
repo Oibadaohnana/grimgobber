@@ -1,13 +1,16 @@
 //! The inventory screen (Tab): the hands and the inventory's grid, items
 //! dragged between them (R turns the one held), and the quick slots along the
-//! bottom, always shown. Painted as one mesh fixed to the camera, in logical
+//! bottom, always shown; in the van's hold, its shelf too (van.rs), tools
+//! dragged off it and back. Painted as one mesh fixed to the camera, in logical
 //! pixels from the window's middle, `y` up; the words are UI text.
 
 use crate::dev::Script;
 use crate::inventory::{At, GRID, Inventory, Item, Kind, size_of};
 use crate::paint::{self, Frame, Hex, Painter, hex};
-use crate::player::LocalPlayer;
+use crate::player::{Dead, LocalPlayer, Player};
 use crate::render::MainCamera;
+use crate::smash::Bank;
+use crate::van::{self, SHELF};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
@@ -21,16 +24,19 @@ struct Screen;
 #[derive(Component)]
 struct Words;
 
-/// The item being dragged, which way it lies, and where on it the pointer took it.
+/// The item being dragged, which way it lies, where on it the pointer took
+/// it, and whether it came off the shelf (gone again unless it is put down).
 #[derive(Resource, Default)]
 pub struct Drag {
     id: Option<usize>,
     turned: bool,
     grab: Vec2,
+    new: bool,
 }
 
 pub struct InventoryUiPlugin;
 
+#[cfg(feature = "client")]
 impl Plugin for InventoryUiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Drag>()
@@ -44,14 +50,17 @@ struct Layout {
     hands: Rect,
     /// The grid's top-left corner.
     grid: Vec2,
+    /// The van's shelf's top-left corner, in the van.
+    shelf: Option<Vec2>,
     quick: [Rect; 4],
 }
 
-fn layout(win: Vec2) -> Layout {
+fn layout(win: Vec2, shelf: bool) -> Layout {
     let top = 250.0 - HEAD;
     Layout {
         hands: Rect::new(-340.0, top - 2.0 * CELL, -340.0 + 4.0 * CELL, top),
         grid: vec2(40.0, top),
+        shelf: shelf.then_some(vec2(-340.0, 20.0)),
         quick: std::array::from_fn(|i| {
             let x = (i as f32 - 2.0) * (SLOT + 8.0) + 4.0;
             let y = -win.y * 0.5 + 18.0;
@@ -60,9 +69,9 @@ fn layout(win: Vec2) -> Layout {
     }
 }
 
-/// The screen rect of `size` cells from `cell`.
-fn cells(lay: &Layout, cell: IVec2, size: IVec2) -> Rect {
-    let tl = lay.grid + vec2(cell.x as f32, -cell.y as f32) * CELL;
+/// The screen rect of `size` cells from `cell` of a grid from `grid`.
+fn cells(grid: Vec2, cell: IVec2, size: IVec2) -> Rect {
+    let tl = grid + vec2(cell.x as f32, -cell.y as f32) * CELL;
     let size = size.as_vec2() * CELL;
     Rect::new(tl.x, tl.y - size.y, tl.x + size.x, tl.y)
 }
@@ -72,13 +81,29 @@ fn rect_of(lay: &Layout, item: &Item) -> Rect {
     let size = item.size().as_vec2() * CELL;
     match item.at {
         At::Hands => Rect::from_center_size(lay.hands.center(), size),
-        At::Grid(cell) => cells(lay, cell, item.size()),
+        At::Grid(cell) => cells(lay.grid, cell, item.size()),
     }
 }
 
+#[derive(PartialEq)]
 enum Drop {
     At(At),
     Quick(usize),
+    Shelf,
+}
+
+/// Whether he may use the van's shelf: alive and in its hold.
+fn at_shelf(bank: Option<&Bank>, p: &Player, dead: bool) -> bool {
+    !dead && bank.is_some_and(|b| van::inside(b, p.body.pos))
+}
+
+/// The shelf's tool under `p`, and its rect.
+fn shelved(lay: &Layout, p: Vec2) -> Option<(Kind, Rect)> {
+    let tl = lay.shelf?;
+    van::TOOLS
+        .iter()
+        .map(|&(kind, cell)| (kind, cells(tl, cell, kind.size())))
+        .find(|t| t.1.contains(p))
 }
 
 /// What letting go of the dragged item at `p` would do: its top-left, at
@@ -90,7 +115,13 @@ fn drop_at(lay: &Layout, drag: &Drag, p: Vec2) -> Option<Drop> {
     if let Some(i) = lay.quick.iter().position(|r| r.contains(p)) {
         return Some(Drop::Quick(i));
     }
-    if !cells(lay, IVec2::ZERO, GRID).contains(p) {
+    if lay
+        .shelf
+        .is_some_and(|tl| cells(tl, IVec2::ZERO, SHELF).contains(p))
+    {
+        return Some(Drop::Shelf);
+    }
+    if !cells(lay.grid, IVec2::ZERO, GRID).contains(p) {
         return None;
     }
     let tl = p - drag.grab;
@@ -113,6 +144,7 @@ fn pointer(window: &Window) -> Option<Vec2> {
     ))
 }
 
+#[cfg(feature = "client")]
 fn spawn(
     mut commands: Commands,
     mut materials: ResMut<Assets<ColorMaterial>>,
@@ -122,7 +154,7 @@ fn spawn(
     let Ok(camera) = camera.single() else {
         return;
     };
-    // Bevy's mesh allocator errors on an empty mesh, and `draw` waits for a robber.
+    // Bevy's mesh allocator errors on an empty mesh, and `draw` waits for a hunter.
     let mut speck = Painter::default();
     speck.rect(Vec2::ZERO, Vec2::ONE, 0.0, hex(0).alpha(0.0));
     commands.entity(camera).with_child((
@@ -149,9 +181,11 @@ pub fn input(
     mouse: Res<ButtonInput<MouseButton>>,
     script: Res<Script>,
     window: Query<&Window, With<PrimaryWindow>>,
-    mut inv: Single<&mut Inventory, With<LocalPlayer>>,
+    me: Single<(&mut Inventory, &Player, Has<Dead>), With<LocalPlayer>>,
+    bank: Option<Res<Bank>>,
     mut drag: ResMut<Drag>,
 ) {
+    let (mut inv, player, dead) = me.into_inner();
     if keys.just_pressed(KeyCode::Tab) || script.pressed("Inventory") {
         inv.open = !inv.open;
     }
@@ -170,6 +204,9 @@ pub fn input(
         }
     }
     if !inv.open {
+        if let (Some(id), true) = (drag.id, drag.new) {
+            inv.remove(id);
+        }
         drag.id = None;
         return;
     }
@@ -179,17 +216,33 @@ pub fn input(
     let Some(p) = pointer(window) else {
         return;
     };
-    let lay = layout(vec2(window.width(), window.height()));
+    let shelf = at_shelf(bank.as_deref(), player, dead);
+    let lay = layout(vec2(window.width(), window.height()), shelf);
     let mine = (0..inv.items.len()).find(|&i| rect_of(&lay, &inv.items[i]).contains(p));
-    if mouse.just_pressed(MouseButton::Left)
-        && let Some(id) = mine
-    {
-        let r = rect_of(&lay, &inv.items[id]);
-        *drag = Drag {
-            id: Some(id),
-            turned: inv.items[id].turned,
-            grab: p - vec2(r.min.x, r.max.y),
-        };
+    if mouse.just_pressed(MouseButton::Left) {
+        if let Some(id) = mine {
+            let r = rect_of(&lay, &inv.items[id]);
+            *drag = Drag {
+                id: Some(id),
+                turned: inv.items[id].turned,
+                grab: p - vec2(r.min.x, r.max.y),
+                new: false,
+            };
+        } else if let Some((kind, r)) = shelved(&lay, p).filter(|t| !van::has(&inv, t.0)) {
+            // Off the grid until put down.
+            inv.items.push(Item {
+                kind,
+                turned: false,
+                at: At::Grid(IVec2::splat(-9)),
+                count: 1,
+            });
+            *drag = Drag {
+                id: Some(inv.items.len() - 1),
+                turned: false,
+                grab: p - vec2(r.min.x, r.max.y),
+                new: true,
+            };
+        }
     }
     if let Some(id) = drag.id {
         if keys.just_pressed(KeyCode::KeyR) {
@@ -198,12 +251,25 @@ pub fn input(
             drag.grab = size.as_vec2() * CELL * vec2(0.5, -0.5);
         }
         if mouse.just_released(MouseButton::Left) {
-            match drop_at(&lay, &drag, p) {
-                Some(Drop::At(at)) => {
-                    inv.put(id, drag.turned, at);
+            let tool = van::TOOLS.iter().any(|t| t.0 == inv.items[id].kind);
+            let placed = match drop_at(&lay, &drag, p) {
+                Some(Drop::At(at)) => inv.put(id, drag.turned, at),
+                Some(Drop::Quick(i)) => {
+                    let ok = !drag.new || inv.stow(id);
+                    if ok {
+                        inv.quick[i] = Some(id);
+                    }
+                    ok
                 }
-                Some(Drop::Quick(i)) => inv.quick[i] = Some(id),
-                None => {}
+                // Back on the shelf.
+                Some(Drop::Shelf) if tool => {
+                    inv.remove(id);
+                    true
+                }
+                _ => false,
+            };
+            if drag.new && !placed {
+                inv.remove(id);
             }
             drag.id = None;
         }
@@ -250,7 +316,8 @@ fn picture(g: &mut Painter, kind: Kind, turned: bool, r: Rect) {
 #[allow(clippy::too_many_arguments)]
 fn draw(
     mut commands: Commands,
-    inv: Single<&Inventory, With<LocalPlayer>>,
+    me: Single<(&Inventory, &Player, Has<Dead>), With<LocalPlayer>>,
+    bank: Option<Res<Bank>>,
     drag: Res<Drag>,
     window: Query<&Window, With<PrimaryWindow>>,
     projection: Query<&Projection, With<MainCamera>>,
@@ -266,9 +333,9 @@ fn draw(
     if let Ok(Projection::Orthographic(o)) = projection.single() {
         t.scale = Vec3::splat(o.scale);
     }
-    let inv = *inv;
+    let (inv, player, dead) = *me;
     let win = vec2(window.width(), window.height());
-    let lay = layout(win);
+    let lay = layout(win, at_shelf(bank.as_deref(), player, dead));
     let p = pointer(window);
     let dragged = drag.id.and_then(|id| inv.items.get(id)).map(|i| i.kind);
     let mut g = Painter::default();
@@ -298,11 +365,14 @@ fn draw(
         panel(
             &mut g,
             format!("INVENTORY  {}x{}", GRID.x, GRID.y),
-            cells(&lay, IVec2::ZERO, GRID),
+            cells(lay.grid, IVec2::ZERO, GRID),
         );
+        if let Some(tl) = lay.shelf {
+            panel(&mut g, "VAN SHELF".into(), cells(tl, IVec2::ZERO, SHELF));
+        }
         for y in 0..GRID.y {
             for x in 0..GRID.x {
-                let r = cells(&lay, ivec2(x, y), IVec2::ONE);
+                let r = cells(lay.grid, ivec2(x, y), IVec2::ONE);
                 boxed(&mut g, r, hex(0x24282d), HOLE, 0.95);
             }
         }
@@ -311,9 +381,44 @@ fn draw(
             && let Some(Drop::At(At::Grid(cell))) = drop_at(&lay, &drag, p)
         {
             let ok = inv.fits(id, drag.turned, cell);
-            let r = cells(&lay, cell, size_of(kind, drag.turned));
+            let r = cells(lay.grid, cell, size_of(kind, drag.turned));
             let tint = if ok { hex(0x4caf50) } else { hex(0xc0392b) };
             g.rect(r.center(), r.half_size(), 0.0, tint.alpha(0.35));
+        }
+        // The shelf's tools, dim once he has one; lit where one would go back.
+        if let Some(tl) = lay.shelf {
+            let all = cells(tl, IVec2::ZERO, SHELF);
+            boxed(&mut g, all, LINE, HOLE, 0.9);
+            let back = dragged.is_some_and(|k| van::TOOLS.iter().any(|t| t.0 == k))
+                && p.is_some_and(|p| drop_at(&lay, &drag, p) == Some(Drop::Shelf));
+            if back {
+                g.rect(
+                    all.center(),
+                    all.half_size(),
+                    0.0,
+                    hex(0x4caf50).alpha(0.25),
+                );
+            }
+            for &(kind, cell) in &van::TOOLS {
+                let r = cells(tl, cell, kind.size());
+                let taken = van::has(inv, kind);
+                let lit = !taken && drag.id.is_none() && p.is_some_and(|p| r.contains(p));
+                let inner =
+                    Rect::from_center_half_size(r.center(), r.half_size() - Vec2::splat(2.0));
+                boxed(&mut g, inner, if lit { GOLD } else { LINE }, TILE, 0.9);
+                picture(&mut g, kind, false, r);
+                if taken {
+                    g.rect(inner.center(), inner.half_size(), 0.0, HOLE.alpha(0.7));
+                }
+                if lit && let Some(p) = p {
+                    text.push((
+                        p + vec2(14.0, -14.0),
+                        kind.name().into(),
+                        14.0,
+                        hex(0xf0ead8),
+                    ));
+                }
+            }
         }
         let hover = p
             .and_then(|p| (0..inv.items.len()).find(|&i| rect_of(&lay, &inv.items[i]).contains(p)));
@@ -349,8 +454,12 @@ fn draw(
         }
         text.push((
             vec2(-340.0, lay.hands.min.y - 20.0),
-            "Drag to move, R turns it\nDrop on 1-4 to bind, right-click clears\nTab or Esc closes"
-                .into(),
+            if lay.shelf.is_some() {
+                "Drag to move, R turns it\nDrop on 1-4 to bind, right-click clears\nTake tools off the shelf, put them back\nTab or Esc closes"
+            } else {
+                "Drag to move, R turns it\nDrop on 1-4 to bind, right-click clears\nTab or Esc closes"
+            }
+            .into(),
             12.0,
             hex(0x9aa0a6),
         ));
@@ -427,12 +536,13 @@ mod tests {
 
     #[test]
     fn a_dragged_item_lands_on_the_cell_under_it() {
-        let lay = layout(vec2(1400.0, 900.0));
+        let lay = layout(vec2(1400.0, 900.0), true);
         // The lockpicks, taken by their middle, let go over cell (3, 2).
         let drag = Drag {
             id: Some(2),
             turned: false,
             grab: vec2(0.5, -0.5) * CELL,
+            new: false,
         };
         let p = lay.grid + vec2(3.4, -2.6) * CELL;
         let landed = drop_at(&lay, &drag, p);
@@ -441,5 +551,7 @@ mod tests {
         assert!(matches!(hands, Some(Drop::At(At::Hands))));
         let slot = drop_at(&lay, &drag, lay.quick[3].center());
         assert!(matches!(slot, Some(Drop::Quick(3))));
+        let shelf = cells(lay.shelf.unwrap(), IVec2::ZERO, SHELF).center();
+        assert!(matches!(drop_at(&lay, &drag, shelf), Some(Drop::Shelf)));
     }
 }

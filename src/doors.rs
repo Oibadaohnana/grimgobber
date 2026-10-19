@@ -1,16 +1,18 @@
 //! Doors swing open, away from whoever comes: pushed by hand within reach
-//! (the robber puts his arm out, and back as it shuts behind him), the glass
+//! (the hunter puts his arm out, and back as it shuts behind him), the glass
 //! entrance by its sensor. How shut each is goes to the ray tracer, so a shut door stops
-//! sight and lamplight. The leaf is drawn as the robber last saw it: in the
+//! sight and lamplight. The leaf is drawn as the hunter last saw it: in the
 //! fog, nobody is seen opening doors. While the wraith haunts, the doors to
 //! the outside slam shut and are locked (`Leaf::locked`, a red lock on
-//! them): solid for the robbers (`Barred`) till it is over.
+//! them): solid for the hunters (`Barred`) till it is over.
 
 use crate::map::{Door, DoorKind, Map, tile_centre};
 use crate::movement::{Aabb, BODY_MARGIN, Solids, TILE};
 use crate::paint;
 use crate::player::{Controls, Dead, Level, LocalPlayer, Player, Reach};
-use crate::render::{WorldMaterials, WorldPart, things_material};
+use crate::render::WorldPart;
+#[cfg(feature = "client")]
+use crate::render::{WorldMaterials, things_material};
 use crate::sight::Sight;
 use crate::smash::Bank;
 use crate::sound::{Clip, Noise};
@@ -29,7 +31,7 @@ const CLOSING: f32 = 0.4;
 /// Swung by the wraith: open this long with nobody there, then slammed in so long.
 const HAUNTED: f32 = 1.2;
 const SLAM: f32 = 0.12;
-/// How far off the robber at a door is heard, in tiles (crouched, not at all).
+/// How far off the hunter at a door is heard, in tiles (crouched, not at all).
 const LOUD: f32 = 4.0;
 
 /// Per tile, as the doors texture holds it: how shut, lying along x, glass, 0.
@@ -59,9 +61,9 @@ pub struct Leaf {
     shown: f32,
     /// Which way across the wall it swings, picked as it starts to open.
     side: f32,
-    /// The robber who opened it, whose arm goes out to it.
+    /// The hunter who opened it, whose arm goes out to it.
     #[entities]
-    robber: Option<Entity>,
+    hunter: Option<Entity>,
     /// Seconds the wraith holds it open, then (below 0) slams it.
     #[serde(skip)]
     haunted: f32,
@@ -71,7 +73,7 @@ pub struct Leaf {
     pub locked: bool,
 }
 
-/// What the robbers walk against: the bank's solids and the locked doorways,
+/// What the hunters walk against: the bank's solids and the locked doorways,
 /// while any door is locked.
 #[derive(Resource, Default)]
 pub struct Barred(pub Option<Solids>);
@@ -109,6 +111,7 @@ impl Plugin for DoorsPlugin {
                 .chain(),
         )
         .init_resource::<Barred>();
+        #[cfg(feature = "client")]
         if crate::drawn(app) {
             app.add_systems(
                 Update,
@@ -136,7 +139,7 @@ pub fn spawn_doors(commands: &mut Commands, map: &Map) {
                 open: 0.0,
                 shown: 0.0,
                 side: 1.0,
-                robber: None,
+                hunter: None,
                 haunted: 0.0,
                 outer: side(1.0) != side(-1.0),
                 locked: false,
@@ -145,6 +148,7 @@ pub fn spawn_doors(commands: &mut Commands, map: &Map) {
     }
 }
 
+#[cfg(feature = "client")]
 pub fn dress(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -182,13 +186,13 @@ fn near_side(d: Door, eye: Vec2) -> Vec2 {
 fn swing(
     time: Res<Time>,
     me: Option<Single<&Player, With<LocalPlayer>>>,
-    mut robbers: Query<(Entity, &Player, &mut Reach), Without<Dead>>,
+    mut hunters: Query<(Entity, &Player, &mut Reach), Without<Dead>>,
     mut leaves: Query<&mut Leaf>,
     wraiths: Query<&Wraith>,
     mut noises: MessageWriter<Noise>,
 ) {
     let haunting = wraiths.iter().any(|w| w.shown && !w.caught);
-    let walkers: Vec<_> = robbers
+    let walkers: Vec<_> = hunters
         .iter()
         .map(|(e, p, _)| (Some(e), p.body.pos, p.body.speed, p.body.is_crouching()))
         .collect();
@@ -204,7 +208,7 @@ fn swing(
         let opener = walkers
             .iter()
             .filter(|_| !locked)
-            .find_map(|&(robber, pos, speed, _)| {
+            .find_map(|&(hunter, pos, speed, _)| {
                 let off = pos - centre;
                 let gap = off.dot(d.across).abs();
                 let near = if by_hand {
@@ -212,7 +216,7 @@ fn swing(
                 } else {
                     off.length() < SENSOR
                 };
-                near.then_some((robber, off, gap, speed))
+                near.then_some((hunter, off, gap, speed))
             });
         let ghost = leaf.haunted > 0.0 && !locked;
         let slam = leaf.haunted < 0.0;
@@ -226,25 +230,25 @@ fn swing(
         }
         let near = opener.is_some() || ghost;
         let was = leaf.open;
-        if let Some((robber, off, _, _)) = opener
+        if let Some((hunter, off, _, _)) = opener
             && was == 0.0
         {
             leaf.side = if off.dot(d.across) > 0.0 { -1.0 } else { 1.0 };
-            leaf.robber = robber;
+            leaf.hunter = hunter;
         } else if ghost && was == 0.0 {
             // Nobody's arm goes out to it.
-            leaf.robber = None;
+            leaf.hunter = None;
         }
         let (opens, shuts) = (near && was == 0.0, !near && was == 1.0);
         if by_hand
             && (opens || shuts)
-            && let Some((_, _, mut reach)) = leaf.robber.and_then(|e| robbers.get_mut(e).ok())
+            && let Some((_, _, mut reach)) = leaf.hunter.and_then(|e| hunters.get_mut(e).ok())
         {
             reach.0 = Some((centre, 0.0));
         }
         let quiet = walkers
             .iter()
-            .find(|w| w.0.is_some() && w.0 == leaf.robber)
+            .find(|w| w.0.is_some() && w.0 == leaf.hunter)
             .is_none_or(|w| w.3);
         if opens || shuts {
             let clip = if opens {
@@ -274,7 +278,7 @@ fn swing(
     }
 }
 
-/// The robbers' solids again whenever the locked doors change.
+/// The hunters' solids again whenever the locked doors change.
 fn bar(
     bank: Res<Bank>,
     leaves: Query<&Leaf>,
@@ -321,6 +325,7 @@ fn to_shut(mut shut: ResMut<Shut>, leaves: Query<&Leaf, Changed<Leaf>>) {
     }
 }
 
+#[cfg(feature = "client")]
 fn upload(
     shut: Res<Shut>,
     world_materials: Res<WorldMaterials>,
@@ -348,7 +353,7 @@ fn show(
         }
         let d = leaf.door;
         let at = near_side(d, b.pos);
-        let reach = sight.robber_reach(b.pos, b.heading, controls.torch, at);
+        let reach = sight.hunter_reach(b.pos, b.heading, controls.torch, at);
         if sight.seen(b.pos, at, reach, b.is_crouching(), doors) < 0.1 {
             continue;
         }

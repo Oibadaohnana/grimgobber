@@ -1,9 +1,10 @@
 //! Loose things about the bank (mugs, staplers, files, paper balls): a
-//! poltergeist flings them at robbers as its sign. The server keeps where
+//! poltergeist flings them at hunters as its sign. The server keeps where
 //! each lies (`Loose`); a client flies it there when it moves, and hears it land.
 
 use crate::movement::TILE;
 use crate::paint;
+#[cfg(feature = "client")]
 use crate::render::{WorldMaterials, things_material};
 use crate::sound::{Clip, Noise};
 use bevy::prelude::*;
@@ -56,6 +57,7 @@ impl Plugin for JunkPlugin {
     }
 }
 
+#[cfg(feature = "client")]
 pub fn dress(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,

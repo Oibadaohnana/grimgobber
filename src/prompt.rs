@@ -1,4 +1,4 @@
-//! The "E ..." prompt: whatever the robber could do with E now offers itself
+//! The "E ..." prompt: whatever the hunter could do with E now offers itself
 //! each frame (the first to has it), and the prompt
 //! shows over where it says.
 

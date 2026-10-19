@@ -1,4 +1,4 @@
-//! The robber's gear, DayZ fashion: items take up blocks of cells in one
+//! The hunter's gear, DayZ fashion: items take up blocks of cells in one
 //! grid, one is in his hands, and quick slots 1–4 take a bound item into his
 //! hands or put it away.
 
@@ -19,6 +19,9 @@ pub enum Kind {
     Trigger,
     Lantern,
     Coffer,
+    Thermometer,
+    Emf,
+    Infrared,
 }
 
 impl Kind {
@@ -33,6 +36,9 @@ impl Kind {
             Kind::Trigger => "Trap trigger",
             Kind::Lantern => "UV lantern",
             Kind::Coffer => "Coffer",
+            Kind::Thermometer => "Thermometer",
+            Kind::Emf => "EMF reader",
+            Kind::Infrared => "Infrared lamp",
         }
     }
 
@@ -50,7 +56,7 @@ impl Kind {
     pub fn size(self) -> IVec2 {
         match self {
             Kind::Crowbar => ivec2(4, 1),
-            Kind::Pistol => ivec2(2, 1),
+            Kind::Pistol | Kind::Thermometer | Kind::Emf | Kind::Infrared => ivec2(2, 1),
             Kind::Lockpicks | Kind::Coin | Kind::Rounds | Kind::Trigger => ivec2(1, 1),
             Kind::Trap | Kind::Lantern => ivec2(2, 2),
             Kind::Coffer => ivec2(3, 2),
@@ -256,12 +262,6 @@ impl Inventory {
         false
     }
 
-    /// Item `id` onto the first free quick slot, if one is.
-    pub fn bind(&mut self, id: usize) -> bool {
-        let free = self.quick.iter_mut().find(|q| q.is_none());
-        free.map(|q| *q = Some(id)).is_some()
-    }
-
     /// A quick slot: its item into the hands, or out of them again.
     pub fn quick(&mut self, slot: usize) {
         let Some(id) = self.quick[slot] else {
@@ -311,7 +311,8 @@ mod tests {
         assert!(inv.add(Kind::Lockpicks, 1, Some(At::Grid(ivec2(7, 4)))));
         assert_eq!(inv.items.last().unwrap().at, At::Grid(ivec2(7, 4)));
         // The trap set turns into its trigger in his hands, and back on its slot.
-        assert!(inv.add(Kind::Trap, 1, None) && inv.bind(6));
+        assert!(inv.add(Kind::Trap, 1, None));
+        inv.quick[2] = Some(6);
         inv.quick(2);
         assert!(inv.change(inv.held().unwrap(), Kind::Trigger));
         assert!(inv.holds(Kind::Trigger));

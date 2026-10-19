@@ -1,10 +1,10 @@
 //! The menus. The title: a lobby code (SCARE, the server's first) to join,
 //! a new lobby to host (the door gives it a random code), or playing alone.
-//! The lobby, between rounds (or for a robber who left one): the
+//! The lobby, between rounds (or for a hunter who left one): the
 //! crew, this player's name (typed straight in), colour and outfit with his
 //! portrait, and Ready (alone, Start). In the bank, Esc opens a menu: Resume,
 //! Back to the lobby, Quit; while it is open the game hears nothing. And the
-//! names over the other robbers, while he sees them. Both menus go by
+//! names over the other hunters, while he sees them. Both menus go by
 //! keys as well as the mouse (`Nav`): up and down move, left and right change
 //! a colour or an outfit, Enter (or Space, in the Esc menu) chooses.
 
@@ -24,6 +24,7 @@ use bevy::camera::visibility::RenderLayers;
 use bevy::camera::{ImageRenderTarget, RenderTarget};
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
+#[cfg(feature = "client")]
 use bevy::render::render_resource::TextureFormat;
 use bevy::ui::UiSystems;
 use bevy_replicon_renet::RenetClient;
@@ -96,7 +97,7 @@ struct Status;
 #[derive(Component)]
 struct Portrait;
 
-/// A name over that robber.
+/// A name over that hunter.
 #[derive(Component)]
 struct Plate(Entity);
 
@@ -131,6 +132,7 @@ struct Heading(usize);
 
 pub struct MenuPlugin;
 
+#[cfg(feature = "client")]
 impl Plugin for MenuPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<EscMenu>()
@@ -191,6 +193,7 @@ fn heading(text: &str) -> impl Bundle {
     label(text, 12.0, DIM)
 }
 
+#[cfg(feature = "client")]
 fn lobby(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     let picture = images.add(Image::new_target_texture(
         PORTRAIT,
@@ -240,7 +243,7 @@ fn lobby(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
                     ..column(4.0)
                 },
                 children![
-                    label("BANK BOBBERY", 30.0, TEXT),
+                    label("GRIMGOBBER", 30.0, TEXT),
                     label("tell what it is, catch it", 13.0, DIM),
                     label(&format!("{VERSION} (protocol {PROTOCOL})"), 11.0, DIM),
                     (CodeLine, label("", 15.0, TEXT)),
@@ -368,7 +371,7 @@ fn title(mut commands: Commands) {
         GlobalZIndex(25),
         Visibility::Hidden,
         children![
-            label("BANK BOBBERY", 30.0, TEXT),
+            label("GRIMGOBBER", 30.0, TEXT),
             label("tell what it is, catch it", 13.0, DIM),
             label(&format!("{VERSION} (protocol {PROTOCOL})"), 11.0, DIM),
             Node {
@@ -430,6 +433,7 @@ fn esc_menu(mut commands: Commands) {
     ));
 }
 
+#[cfg(feature = "client")]
 fn portrait(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -687,7 +691,7 @@ fn typing(
     }
 }
 
-/// The lobby shows while he has no robber; the Esc menu while it is open.
+/// The lobby shows while he has no hunter; the Esc menu while it is open.
 #[allow(clippy::type_complexity)]
 fn show(
     me: Option<Single<(), With<LocalPlayer>>>,
@@ -802,7 +806,7 @@ fn lines(
         set(field, format!("{}_", settings.0.name));
     }
     let word = match (alone, ready_now) {
-        (true, false) => "Start the heist",
+        (true, false) => "Start the hunt",
         (true, true) => "Starting...",
         (false, false) => "Ready",
         (false, true) => "Not ready",
@@ -948,7 +952,7 @@ fn repaint(
 type Other<'a> = (Entity, &'a Shown, &'a Look, Has<Dead>);
 type Eye<'a> = (&'a Player, &'a Controls, Has<Dead>);
 
-/// A name over each other robber he sees (the dead only once he is dead).
+/// A name over each other hunter he sees (the dead only once he is dead).
 #[allow(clippy::too_many_arguments)]
 fn plates(
     me: Option<Single<Eye, With<LocalPlayer>>>,
@@ -990,7 +994,7 @@ fn plates(
             (Some(me), Some(sight), Some(shut)) => {
                 let (p, c, i_dead) = **me;
                 let b = &p.body;
-                let reach = sight.robber_reach(b.pos, b.heading, c.torch, shown.pos);
+                let reach = sight.hunter_reach(b.pos, b.heading, c.torch, shown.pos);
                 (!dead || i_dead)
                     && sight.seen(b.pos, shown.pos, reach, b.is_crouching(), &shut.0) > 0.5
             }

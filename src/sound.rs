@@ -1,5 +1,5 @@
 //! The sounds of `../bankbobbery`, as its `audio.js` places them: quieter
-//! with distance, and quieter still (`WALL`) where the robber cannot see.
+//! with distance, and quieter still (`WALL`) where the hunter cannot see.
 //! Doors are one-shots; footsteps a loop on each walker, at the pace he goes;
 //! under it all, while there is a bank, the air: outside bims' temperate
 //! air, inside a building's deep hum, faded into each other at the door.
@@ -9,6 +9,7 @@ use crate::doors::Shut;
 use crate::movement::{MARCH_SPEED, TILE};
 use crate::player::{Controls, Dead, LocalPlayer, Player};
 use crate::sight::Sight;
+#[cfg(feature = "client")]
 use bevy::audio::{
     AudioPlayer, AudioSink, AudioSinkPlayback, AudioSource, PlaybackSettings, Volume,
 };
@@ -32,6 +33,8 @@ pub enum Clip {
     Thud,
     /// The banshee.
     Wail,
+    /// An EMF reader reading high.
+    Beep,
 }
 
 /// A noise at a point in the building: its sample, if it has one, and how
@@ -47,21 +50,36 @@ pub struct Noise {
 // the slam lands as it shuts, 0.4 s on: `ffmpeg -i Opening_door.mp3 -ss 0.29`
 // (Closing_door.mp3 `-ss 0.59`) `-af afade=t=in:d=0.005 -ac 1 -ar 48000
 // -c:a libvorbis -q:a 4`.
+#[cfg(feature = "client")]
 const DOOR_OPEN: &[u8] = include_bytes!("../sounds/door_open.ogg");
+#[cfg(feature = "client")]
 const DOOR_CLOSE: &[u8] = include_bytes!("../sounds/door_close.ogg");
+#[cfg(feature = "client")]
 const WALK: &[u8] = include_bytes!("../sounds/walking.ogg");
 // Synthesised by `sounds/glass.py`.
+#[cfg(feature = "client")]
 const GLASS: &[u8] = include_bytes!("../sounds/glass.ogg");
 // Synthesised by `sounds/coin.py`.
+#[cfg(feature = "client")]
 const COIN: &[u8] = include_bytes!("../sounds/coin.ogg");
+// Synthesised by `sounds/beep.py`.
+#[cfg(feature = "client")]
+const BEEP: &[u8] = include_bytes!("../sounds/beep.ogg");
+#[cfg(feature = "client")]
 const SHOT: &[u8] = include_bytes!("../sounds/pistol_shot.ogg");
+#[cfg(feature = "client")]
 const RELOAD: &[u8] = include_bytes!("../sounds/reload.ogg");
+#[cfg(feature = "client")]
 const UNHOLSTER: &[u8] = include_bytes!("../sounds/unholster.ogg");
+#[cfg(feature = "client")]
 const HOLSTER: &[u8] = include_bytes!("../sounds/holster.ogg");
+#[cfg(feature = "client")]
 const KNOCKOUT: &[u8] = include_bytes!("../sounds/knockout.ogg");
 // Loops at -30 LUFS: bims2_bevy's temperate air (`Sounds/game/temperate.ogg`),
 // and a hum synthesised by `sounds/inside.py`.
+#[cfg(feature = "client")]
 const OUTSIDE: &[u8] = include_bytes!("../sounds/outside.ogg");
+#[cfg(feature = "client")]
 const INSIDE: &[u8] = include_bytes!("../sounds/inside.ogg");
 /// The hum is played at half the outside air's level.
 const HUM: f32 = 0.5;
@@ -69,9 +87,11 @@ const HUM: f32 = 0.5;
 const FADE: f32 = 1.5;
 
 /// The air's loops, by whether they are heard indoors.
+#[cfg(feature = "client")]
 #[derive(Component)]
 struct Air(bool);
 
+#[cfg(feature = "client")]
 #[derive(Resource)]
 struct Clips {
     door_open: Handle<AudioSource>,
@@ -79,6 +99,7 @@ struct Clips {
     walk: Handle<AudioSource>,
     glass: Handle<AudioSource>,
     coin: Handle<AudioSource>,
+    beep: Handle<AudioSource>,
     shot: Handle<AudioSource>,
     reload: Handle<AudioSource>,
     unholster: Handle<AudioSource>,
@@ -86,8 +107,10 @@ struct Clips {
     knockout: Handle<AudioSource>,
 }
 
+#[cfg(feature = "client")]
 pub struct SoundPlugin;
 
+#[cfg(feature = "client")]
 impl Plugin for SoundPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<Noise>();
@@ -106,6 +129,7 @@ impl Plugin for SoundPlugin {
     }
 }
 
+#[cfg(feature = "client")]
 fn load(mut assets: ResMut<Assets<AudioSource>>, mut commands: Commands) {
     let mut add = |bytes: &'static [u8]| {
         assets.add(AudioSource {
@@ -118,6 +142,7 @@ fn load(mut assets: ResMut<Assets<AudioSource>>, mut commands: Commands) {
         walk: add(WALK),
         glass: add(GLASS),
         coin: add(COIN),
+        beep: add(BEEP),
         shot: add(SHOT),
         reload: add(RELOAD),
         unholster: add(UNHOLSTER),
@@ -135,6 +160,7 @@ fn load(mut assets: ResMut<Assets<AudioSource>>, mut commands: Commands) {
 
 /// The air where the camera is (on him, or free in the sim), while there
 /// is a bank: not at the title or in the lobby.
+#[cfg(feature = "client")]
 fn air(
     time: Res<Time>,
     level: Res<SoundLevel>,
@@ -160,7 +186,8 @@ fn air(
     }
 }
 
-/// What the robber hears by: where he is, and what he can see.
+/// What the hunter hears by: where he is, and what he can see.
+#[cfg(feature = "client")]
 #[derive(bevy::ecs::system::SystemParam)]
 struct Ear<'w, 's> {
     me: Single<'w, 's, (&'static Player, &'static Controls), With<LocalPlayer>>,
@@ -169,6 +196,7 @@ struct Ear<'w, 's> {
     level: Res<'w, SoundLevel>,
 }
 
+#[cfg(feature = "client")]
 impl Ear<'_, '_> {
     /// How loud a sound carrying `range` tiles is from `at`, as `place` in audio.js.
     fn heard(&self, at: Vec2, range: f32) -> f32 {
@@ -180,15 +208,16 @@ impl Ear<'_, '_> {
         let doors = &self.shut.0;
         let reach = self
             .sight
-            .robber_reach(b.pos, b.heading, controls.torch, at);
+            .hunter_reach(b.pos, b.heading, controls.torch, at);
         let seen = self.sight.seen(b.pos, at, reach, b.is_crouching(), doors) > 0.1;
         near * if seen { 1.0 } else { WALL }
     }
 }
 
 /// Every walker gets his footsteps, silent until he moves.
-fn feet(clips: Res<Clips>, mut commands: Commands, robbers: Query<Entity, Added<Player>>) {
-    for e in &robbers {
+#[cfg(feature = "client")]
+fn feet(clips: Res<Clips>, mut commands: Commands, hunters: Query<Entity, Added<Player>>) {
+    for e in &hunters {
         commands.entity(e).insert((
             AudioPlayer::new(clips.walk.clone()),
             PlaybackSettings::LOOP.with_volume(Volume::SILENT),
@@ -196,12 +225,13 @@ fn feet(clips: Res<Clips>, mut commands: Commands, robbers: Query<Entity, Added<
     }
 }
 
+#[cfg(feature = "client")]
 fn noises(clips: Res<Clips>, ear: Ear, mut noises: MessageReader<Noise>, mut commands: Commands) {
     for &Noise { clip, at, .. } in noises.read() {
         let Some(clip) = clip else {
             continue;
         };
-        // Its sample, loudness, and the tiles it carries to the robber's ear.
+        // Its sample, loudness, and the tiles it carries to the hunter's ear.
         let (handle, gain, range) = match clip {
             // The door's creak, slowed down to a moan.
             Clip::Wail => (&clips.door_open, 1.0, 40.0),
@@ -210,6 +240,7 @@ fn noises(clips: Res<Clips>, ear: Ear, mut noises: MessageReader<Noise>, mut com
             Clip::DoorClose => (&clips.door_close, 0.7, 13.0),
             Clip::Glass => (&clips.glass, 1.0, 24.0),
             Clip::Coin => (&clips.coin, 0.8, 14.0),
+            Clip::Beep => (&clips.beep, 0.35, 10.0),
             Clip::Shot => (&clips.shot, 0.8, 30.0),
             Clip::Reload => (&clips.reload, 0.9, 8.0),
             Clip::Unholster => (&clips.unholster, 0.9, 8.0),
@@ -227,10 +258,11 @@ fn noises(clips: Res<Clips>, ear: Ear, mut noises: MessageReader<Noise>, mut com
     }
 }
 
-fn steps(ear: Ear, mut robbers: Query<(&Player, Has<LocalPlayer>, Has<Dead>, &mut AudioSink)>) {
+#[cfg(feature = "client")]
+fn steps(ear: Ear, mut hunters: Query<(&Player, Has<LocalPlayer>, Has<Dead>, &mut AudioSink)>) {
     // His own feet at a whisper crouched; anyone else's by where they are.
     let pace = |speed: f32| (speed / MARCH_SPEED).clamp(0.0, 1.8);
-    for (p, me, dead, mut sink) in &mut robbers {
+    for (p, me, dead, mut sink) in &mut hunters {
         let b = &p.body;
         // The dead's feet make no sound.
         let walking = !b.is_rolling() && b.speed > 1.0 && !dead;
@@ -245,7 +277,8 @@ fn steps(ear: Ear, mut robbers: Query<(&Player, Has<LocalPlayer>, Has<Dead>, &mu
     }
 }
 
-#[cfg(test)]
+// Decoding needs the audio half, which the server build leaves out.
+#[cfg(all(test, feature = "client"))]
 mod tests {
     use super::*;
     use bevy::audio::Decodable;
@@ -253,8 +286,8 @@ mod tests {
     #[test]
     fn every_clip_decodes() {
         for bytes in [
-            DOOR_OPEN, DOOR_CLOSE, WALK, GLASS, COIN, SHOT, RELOAD, UNHOLSTER, HOLSTER, KNOCKOUT,
-            OUTSIDE, INSIDE,
+            DOOR_OPEN, DOOR_CLOSE, WALK, GLASS, COIN, BEEP, SHOT, RELOAD, UNHOLSTER, HOLSTER,
+            KNOCKOUT, OUTSIDE, INSIDE,
         ] {
             let clip = AudioSource {
                 bytes: bytes.into(),

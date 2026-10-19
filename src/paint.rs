@@ -245,7 +245,10 @@ pub fn paint_props(props: &[Prop]) -> [Painter; 3] {
     let mut layers = [Painter::default(), Painter::default(), Painter::default()];
     // Shadows first, so nothing's shadow falls on another's top.
     for p in props {
-        if matches!(p.kind, Rug | VaultDoor | Stanchion | StreetLamp | Tree) {
+        if matches!(
+            p.kind,
+            Rug | VaultDoor | Stanchion | StreetLamp | Tree | VanWall
+        ) {
             continue;
         }
         let b = p.body;
@@ -612,7 +615,9 @@ fn paint_prop(p: &Prop, g: &mut Painter) {
             }
             g.circle(o, 12.0, pal::LEAF);
         }
-        Car | Van => paint_car(g, h, &mut rng, p.kind == Van),
+        Car => paint_car(g, h, &mut rng, false),
+        Van => van_hold(g, h),
+        VanWall => {}
         StreetLamp => {
             g.circle(o, 7.0, hex(0x2a2c30));
             g.circle(o, 4.5, hex(0x40444a));
@@ -686,6 +691,68 @@ fn paint_high(p: &Prop, g: &mut Painter) {
     }
 }
 
+/// The van with its roof off, along `+y` to its cab: the hold's ribbed
+/// floor, the sliding door open on the bank's side (`-x`), the shelf at its
+/// back, the seats and dashboard.
+fn van_hold(g: &mut Painter, h: Vec2) {
+    let white = hex(0xe8e6e0);
+    let back = 1.5 * TILE;
+    g.rounded(Vec2::ZERO, h, 10.0, white.shade(-0.4));
+    g.rounded(Vec2::ZERO, h - Vec2::splat(2.0), 9.0, white.shade(-0.15));
+    let floor = hex(0x34373c);
+    g.rect(Vec2::ZERO, vec2(h.x - 6.0, back), 0.0, floor);
+    for k in -3..=3 {
+        let x = k as f32 * 10.0;
+        g.line(vec2(x, -back), vec2(x, back), 1.2, floor.shade(-0.3));
+    }
+    let door = (crate::map::VAN_DOOR.1 - crate::map::VAN_DOOR.0) * TILE * 0.5;
+    g.rect(vec2(-h.x + 3.0, 0.0), vec2(3.5, door), 0.0, hex(0x1a1c1f));
+    // The shelf: boards across, cases on them.
+    let deep = (h.y - back) * 0.5;
+    let shelf = vec2(0.0, -back - deep);
+    g.rect(shelf, vec2(h.x - 5.0, deep), 0.0, hex(0x2a2d33));
+    for (k, case) in [0x8a6a2a, 0x3a3f46, 0x5a1210, 0x2b2f35, 0x8a6cff]
+        .iter()
+        .enumerate()
+    {
+        let x = -h.x + 14.0 + k as f32 * 17.0;
+        g.rounded(shelf + vec2(x, 2.0), vec2(6.5, deep - 7.0), 2.0, hex(*case));
+    }
+    g.line(
+        shelf + vec2(-h.x + 5.0, deep - 3.0),
+        shelf + vec2(h.x - 5.0, deep - 3.0),
+        2.0,
+        pal::STEEL,
+    );
+    // The cab.
+    let cab = vec2(0.0, back + deep);
+    g.rect(cab, vec2(h.x - 5.0, deep), 0.0, hex(0x222428));
+    for x in [-20.0, 20.0] {
+        g.rounded(cab + vec2(x, -6.0), vec2(14.0, 11.0), 4.0, hex(0x3a3634));
+    }
+    g.rect(
+        vec2(0.0, h.y - 12.0),
+        vec2(h.x - 6.0, 4.0),
+        0.0,
+        hex(0x15161a),
+    );
+    g.rounded(
+        vec2(0.0, h.y - 5.0),
+        vec2(h.x - 8.0, 3.0),
+        2.0,
+        hex(0x2a3440),
+    );
+}
+
+/// The van's roof, over its hold till the hunter looking is in it.
+pub fn van_roof(p: &Prop) -> Mesh {
+    let mut g = Painter::default();
+    let (frame, h) = frame_of(p);
+    g.frame = frame;
+    paint_car(&mut g, h, &mut Rng::new(p.seed as u64), true);
+    g.build()
+}
+
 fn paint_car(g: &mut Painter, h: Vec2, rng: &mut Rng, van: bool) {
     let colour = if van {
         hex(0xe8e6e0)
@@ -732,7 +799,7 @@ fn paint_car(g: &mut Painter, h: Vec2, rng: &mut Rng, van: bool) {
 }
 
 /// Each part is its own mesh, in the body's frame: `+x` forward, `+y` left.
-pub struct RobberParts {
+pub struct HunterParts {
     pub shadow: Mesh,
     pub foot: Mesh,
     /// A knee seen from above, shown crouched.
@@ -825,8 +892,8 @@ pub fn door_leaf(kind: DoorKind) -> Mesh {
     g.build()
 }
 
-/// Fading, if he is not the robber looking; in his look's outfit and colour.
-pub fn robber(fades: bool, look: &Look) -> RobberParts {
+/// Fading, if he is not the hunter looking; in his look's outfit and colour.
+pub fn hunter(fades: bool, look: &Look) -> HunterParts {
     let build = |f: &dyn Fn(&mut Painter)| {
         let mut g = Painter {
             fades,
@@ -835,7 +902,7 @@ pub fn robber(fades: bool, look: &Look) -> RobberParts {
         f(&mut g);
         g.build()
     };
-    RobberParts {
+    HunterParts {
         shadow: build(&|g| {
             g.circle(vec2(-2.0, -2.0), 24.0, hex(0x000000).alpha(0.12));
             g.circle(vec2(-2.0, -2.0), 20.0, hex(0x000000).alpha(0.18));
@@ -1045,6 +1112,46 @@ pub fn item(g: &mut Painter, kind: Kind, half: Vec2) {
             g.circle(vec2(0.0, 0.0), 4.0, hex(0xc02818));
             g.circle(vec2(-1.0, 1.0), 1.6, hex(0xff6a50));
         }
+        Kind::Thermometer => {
+            let body = hex(0x3a3f46);
+            let grip = [
+                vec2(-hx + 14.0, -2.0),
+                vec2(-hx + 26.0, -2.0),
+                vec2(-hx + 22.0, -hy + 2.0),
+                vec2(-hx + 10.0, -hy + 2.0),
+            ];
+            g.poly(&grip, body.shade(-0.4));
+            g.rounded(vec2(0.0, 5.0), vec2(hx - 6.0, 9.0), 4.0, body);
+            g.rect(vec2(-10.0, 5.0), vec2(14.0, 5.5), 0.0, hex(0x9fb8a0));
+            g.rect(vec2(-10.0, 5.0), vec2(9.0, 1.4), 0.0, hex(0x2a3a2c));
+            g.circle(vec2(hx - 9.0, 5.0), 3.5, hex(0x111215));
+            g.circle(vec2(hx - 9.0, 5.0), 1.6, hex(0xc02818));
+        }
+        Kind::Emf => {
+            g.rect(vec2(-hx + 8.0, 0.0), vec2(5.0, 3.0), 0.0, hex(0x111215));
+            g.rounded(vec2(4.0, 0.0), vec2(hx - 8.0, hy - 6.0), 5.0, hex(0x2a2d33));
+            for (i, &c) in crate::instruments::LEDS.iter().enumerate() {
+                g.circle(vec2(-20.0 + 10.0 * i as f32, 4.0), 3.2, hex(c).shade(-0.55));
+            }
+            g.rect(vec2(4.0, -8.0), vec2(22.0, 2.0), 0.0, hex(0x1a1c20));
+        }
+        Kind::Infrared => {
+            g.rect(vec2(-6.0, -hy + 7.0), vec2(16.0, 2.0), 0.0, hex(0x1a1c20));
+            g.rounded(
+                vec2(-6.0, 0.0),
+                vec2(hx - 16.0, hy - 8.0),
+                4.0,
+                hex(0x2a2d33),
+            );
+            g.rounded(
+                vec2(hx - 12.0, 0.0),
+                vec2(8.0, hy - 4.0),
+                3.0,
+                hex(0x15171b),
+            );
+            g.rect(vec2(hx - 8.0, 0.0), vec2(3.0, hy - 8.0), 0.0, hex(0x5a1210));
+            g.circle(vec2(-hx + 16.0, 6.0), 2.0, hex(0xc02818));
+        }
         Kind::Lockpicks => {
             for k in 0..3 {
                 let y = -4.0 + 4.0 * k as f32;
@@ -1065,6 +1172,49 @@ fn coin_face(g: &mut Painter, at: Vec2, r: f32) {
     g.circle(at, r, pal::GOLD.shade(-0.4));
     g.circle(at, r * 0.8, pal::GOLD);
     g.circle(at + vec2(-0.25, 0.25) * r, r * 0.3, pal::GOLD.shade(0.4));
+}
+
+/// A thermometer, EMF reader or infrared lamp in his hand, along `x` from it, its unlit
+/// lights where `led` goes.
+pub fn meter(kind: Kind, fades: bool) -> Mesh {
+    let mut g = Painter {
+        fades,
+        ..Painter::default()
+    };
+    match kind {
+        Kind::Emf => {
+            g.rounded(vec2(3.0, 0.0), vec2(7.0, 3.2), 1.5, hex(0x2a2d33));
+            for (i, &c) in crate::instruments::LEDS.iter().enumerate() {
+                g.circle(led_at(i), 0.8, hex(c).shade(-0.6));
+            }
+        }
+        Kind::Infrared => {
+            g.rounded(vec2(2.0, 0.0), vec2(6.0, 2.4), 1.2, hex(0x2a2d33));
+            g.rounded(vec2(8.0, 0.0), vec2(1.6, 3.6), 0.8, hex(0x15171b));
+            g.rect(vec2(9.0, 0.0), vec2(0.6, 2.8), 0.0, hex(0x5a1210));
+        }
+        _ => {
+            g.rounded(vec2(3.0, 0.0), vec2(6.0, 2.6), 1.2, hex(0x3a3f46));
+            g.rect(vec2(2.0, 0.0), vec2(2.4, 1.6), 0.0, hex(0x9fb8a0));
+            g.circle(vec2(8.6, 0.0), 0.9, hex(0xc02818));
+        }
+    }
+    g.build()
+}
+
+/// Where the reader's `i`th light is, in `meter`'s frame.
+pub fn led_at(i: usize) -> Vec2 {
+    vec2(-1.4 + 2.3 * i as f32, 0.0)
+}
+
+/// An EMF reader's light, lit.
+pub fn led(i: usize, fades: bool) -> Mesh {
+    let mut g = Painter {
+        fades,
+        ..Painter::default()
+    };
+    g.circle(Vec2::ZERO, 1.0, hex(crate::instruments::LEDS[i]).glow(1.3));
+    g.build()
 }
 
 /// A coin, in his hand, in the air or on the floor.
@@ -1368,13 +1518,17 @@ pub fn wraith(t: f32) -> Mesh {
 
 /// A bare footprint the wraith leaves, toes along `+x`, the left one if
 /// `left`: a faint cold glow, to be seen in the dark, at `strength` (0 to 1).
-pub fn footprint(left: bool, strength: f32) -> Mesh {
+pub fn footprint(left: bool, strength: f32, infrared: bool) -> Mesh {
     let mut g = Painter {
         fades: true,
         ..Painter::default()
     };
     let side = if left { 1.0 } else { -1.0 };
-    let mut ink = hex(0x9fe8ff).glow(0.5);
+    let mut ink = if infrared {
+        hex(0xff4030).glow(0.7)
+    } else {
+        hex(0x9fe8ff).glow(0.5)
+    };
     ink.rgba[3] = 0.55 * strength;
     g.ellipse(vec2(2.0, 0.6 * side), vec2(5.5, 3.0), 0.08 * side, ink);
     g.ellipse(vec2(-5.5, 0.0), vec2(3.0, 2.4), 0.0, ink);
@@ -1385,31 +1539,16 @@ pub fn footprint(left: bool, strength: f32) -> Mesh {
     g.build()
 }
 
-/// An item lying on the ground, at the world's scale (the inventory's cell is 46).
-pub fn loot(kind: Kind) -> Mesh {
-    let mut g = Painter::default();
-    let half = kind.size().as_vec2() * 46.0 * 0.5;
-    let k = 0.42;
-    g.frame = Frame {
-        origin: Vec2::ZERO,
-        x: Vec2::X * k,
-        y: Vec2::Y * k,
-    };
-    g.rounded(Vec2::ZERO, half, 8.0, hex(0x1c1e22).alpha(0.8));
-    item(&mut g, kind, half);
-    g.build()
-}
-
-/// A UV lantern's beam, one long from its lens along `x`, `half` its half
-/// angle: violet, fading out along it.
-pub fn beam(half: f32) -> Mesh {
+/// A lamp's beam, one long from its lens along `x`, `half` its half
+/// angle, `ink` at the lens, fading out along it.
+pub fn beam(half: f32, ink: Paint) -> Mesh {
     let mut g = Painter::default();
     let n = 10;
     let wide = half.tan();
     for k in 0..n {
         let (a, b) = (k as f32 / n as f32, (k + 1) as f32 / n as f32);
-        let mut violet = hex(0x9a6cff).glow(1.4);
-        violet.rgba[3] = 0.3 * (1.0 - a).powf(1.5);
+        let mut violet = ink;
+        violet.rgba[3] = ink.rgba[3] * (1.0 - a).powf(1.5);
         let pts = [
             vec2(a, -a * wide),
             vec2(b, -b * wide),
@@ -1653,7 +1792,7 @@ fn head(g: &mut Painter, look: &Look) {
     }
 }
 
-/// The robber standing, seen from above, his face up the screen, `k` times
+/// The hunter standing, seen from above, his face up the screen, `k` times
 /// as big: for the lobby, in one mesh.
 pub fn portrait(look: &Look, k: f32) -> Mesh {
     let mut g = Painter::default();
