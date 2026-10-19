@@ -1,18 +1,22 @@
 //! Coins: in hand, a left click throws one at the pointer, up to `THROW`
 //! tiles, stopping short of anything solid in the way. Landing, it plings,
-//! heard `LOUD` tiles off, and it lies on the floor till the robber picks it
-//! up again (E).
+//! heard `LOUD` tiles off (on the server, from `Toss`), and it lies on the
+//! floor till the robber picks it up again (E). Only he sees his coins.
 
 use crate::dev::Script;
 use crate::inventory::{Inventory, Kind};
 use crate::movement::{Solids, TILE};
+use crate::net::{Owner, sent_by};
 use crate::paint;
+use crate::player::{Dead, LocalPlayer};
 use crate::player::{Level, Living, Player, Shown, Swing};
 use crate::render::{MainCamera, WorldMaterials, WorldPart, things_material};
 use crate::sound::{Clip, Noise};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use bevy_replicon::prelude::ClientState;
+use bevy_replicon::prelude::{ClientState, FromClient};
+use bevy_replicon::shared::backend::connected_client::NetworkId;
+use serde::{Deserialize, Serialize};
 use std::f32::consts::PI;
 
 const THROW: f32 = 8.0;
@@ -30,6 +34,10 @@ struct Flying {
     age: f32,
     time: f32,
 }
+
+/// A coin thrown to here, asked of the server, which hears it.
+#[derive(Message, Serialize, Deserialize)]
+pub struct Toss(pub Vec2);
 
 /// A coin on the floor.
 #[derive(Component)]
@@ -49,12 +57,15 @@ pub struct ThrowPlugin;
 
 impl Plugin for ThrowPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn).add_systems(
-            Update,
-            (aim, throw, fly, collect).chain().distributive_run_if(
-                resource_exists::<Level>.and_then(in_state(ClientState::Disconnected)),
-            ),
-        );
+        app.add_systems(Update, tossed.run_if(in_state(ClientState::Disconnected)));
+        if crate::drawn(app) {
+            app.add_systems(Startup, spawn).add_systems(
+                Update,
+                (aim, throw, fly, collect)
+                    .chain()
+                    .run_if(resource_exists::<Level>),
+            );
+        }
     }
 }
 
@@ -120,7 +131,7 @@ fn aim(
 
 /// Where a coin thrown from `from` at `to` comes down: no further than
 /// `THROW` tiles, and short of the first solid thing on the way.
-fn landing(from: Vec2, to: Vec2, solids: &Solids) -> Vec2 {
+pub fn landing(from: Vec2, to: Vec2, solids: &Solids) -> Vec2 {
     let to = from + (to - from).clamp_length_max(THROW * TILE);
     let n = (from.distance(to) / 4.0).ceil().max(1.0) as usize;
     let mut last = from;
@@ -144,6 +155,7 @@ fn throw(
     level: Res<Level>,
     coin: Res<CoinMesh>,
     world_materials: Res<WorldMaterials>,
+    mut toss: MessageWriter<Toss>,
     mut commands: Commands,
 ) {
     let (player, mut inventory, mut strike) = me.into_inner();
@@ -163,6 +175,7 @@ fn throw(
     };
     let from = b.pos + ahead * 16.0;
     let to = landing(from, aim, &level.solids);
+    toss.write(Toss(to));
     strike.0 = Some(0.0);
     commands.spawn((
         WorldPart,
@@ -197,6 +210,29 @@ fn fly(
             noises.write(Noise {
                 clip: Some(Clip::Coin),
                 at: f.to,
+                loud: 0.0,
+            });
+        }
+    }
+}
+
+type Thrower<'a> = (&'a Player, Option<&'a Owner>, Has<LocalPlayer>);
+
+/// A coin thrown, within his reach of it: heard where it lands.
+fn tossed(
+    mut asks: MessageReader<FromClient<Toss>>,
+    ids: Query<&NetworkId>,
+    robbers: Query<Thrower, Without<Dead>>,
+    mut noises: MessageWriter<Noise>,
+) {
+    for FromClient { client_id, message } in asks.read() {
+        if robbers.iter().any(|r| {
+            sent_by(*client_id, &ids, r.1, r.2)
+                && r.0.body.pos.distance(message.0) < (THROW + 1.0) * TILE
+        }) {
+            noises.write(Noise {
+                clip: None,
+                at: message.0,
                 loud: LOUD,
             });
         }

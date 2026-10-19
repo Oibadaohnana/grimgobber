@@ -23,7 +23,7 @@ struct Words;
 
 /// The item being dragged, which way it lies, and where on it the pointer took it.
 #[derive(Resource, Default)]
-struct Drag {
+pub struct Drag {
     id: Option<usize>,
     turned: bool,
     grab: Vec2,
@@ -144,7 +144,7 @@ fn spawn(
     ));
 }
 
-fn input(
+pub fn input(
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     script: Res<Script>,

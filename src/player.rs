@@ -12,6 +12,8 @@ use crate::render::{
     MainCamera, WorldMaterial, WorldMaterials, WorldPart, things_material, write_params,
 };
 use crate::sanity::Sanity;
+use crate::sim::Sim;
+use crate::smash::Bank;
 use crate::wraith::{Wraith, flicker_level};
 use bevy::ecs::query::QueryItem;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
@@ -60,6 +62,16 @@ impl Level {
         self.hideouts.iter().copied().find(|h| h.contains(at))
     }
 
+    /// Whether the line from `a` to `b` passes through a hideout neither stands in.
+    pub fn screened(&self, a: Vec2, b: Vec2) -> bool {
+        let n = (a.distance(b) / 8.0).ceil() as usize;
+        self.hideouts.iter().any(|h| {
+            !h.contains(a)
+                && !h.contains(b)
+                && (1..n).any(|k| h.contains(a.lerp(b, k as f32 / n as f32)))
+        })
+    }
+
     pub fn in_cover(&self, b: &Body) -> bool {
         b.is_crouching()
             && self
@@ -76,7 +88,9 @@ pub struct Controls {
     pub sprint: bool,
     /// A roll asked for and not yet started.
     pub roll: bool,
+    /// The flashlight on his backpack, and a UV lantern in his hand, shining.
     pub torch: bool,
+    pub uv: bool,
     pub crouch: bool,
     /// The pointer in the world, while it is in the window.
     pub pointer: Option<Vec2>,
@@ -140,7 +154,9 @@ const SWING_TIME: f32 = 0.35;
 pub enum Part {
     Foot(i8),
     Knee(i8),
-    Bag,
+    Pack,
+    /// The flashlight on his backpack's strap.
+    Lamp,
     Torso,
     Arm(i8),
     Hand(i8),
@@ -189,8 +205,8 @@ pub fn dress(
     for (robber, player, look, local) in &robbers {
         let at = player.body.pos;
         let p = paint::robber(!local, look);
-        let [foot, knee, arm, glove, crowbar, torch, lens, streak] = [
-            p.foot, p.knee, p.arm, p.glove, p.crowbar, p.torch, p.lens, p.streak,
+        let [foot, knee, arm, glove, crowbar, lamp, lens, streak] = [
+            p.foot, p.knee, p.arm, p.glove, p.crowbar, p.lamp, p.lens, p.streak,
         ]
         .map(|m| Mesh2d(meshes.add(m)));
         let coin = Mesh2d(meshes.add(paint::coin()));
@@ -233,10 +249,23 @@ pub fn dress(
                     Transform::from_xyz(-1.0, 0.0, 0.0),
                 ));
                 r.spawn((
-                    Part::Bag,
-                    Mesh2d(meshes.add(p.bag)),
+                    Part::Pack,
+                    Mesh2d(meshes.add(p.pack)),
                     mat.clone(),
                     Transform::from_xyz(-13.0, 0.0, 0.2),
+                ));
+                r.spawn((
+                    Part::Lamp,
+                    lamp,
+                    mat.clone(),
+                    Transform::from_xyz(4.0, 9.0, 0.45),
+                ))
+                .with_child((
+                    Part::Lens,
+                    lens,
+                    mat.clone(),
+                    Transform::from_xyz(0.0, 0.0, 0.01),
+                    Visibility::Hidden,
                 ));
                 for side in [-1i8, 1] {
                     r.spawn((
@@ -266,22 +295,6 @@ pub fn dress(
                                 mat.clone(),
                                 hand.with_translation(vec3(17.0, 0.0, 0.1)),
                             ));
-                        } else {
-                            a.spawn((
-                                Part::Tool(Kind::Flashlight),
-                                torch.clone(),
-                                mat.clone(),
-                                hand.with_rotation(Quat::from_rotation_z(0.42)),
-                            ))
-                            .with_children(|t| {
-                                t.spawn((
-                                    Part::Lens,
-                                    lens.clone(),
-                                    mat.clone(),
-                                    Transform::from_xyz(0.0, 0.0, 0.01),
-                                    Visibility::Hidden,
-                                ));
-                            });
                         }
                     });
                 }
@@ -311,12 +324,14 @@ pub fn dress(
     }
 }
 
-fn read_controls(
+pub fn read_controls(
     keys: Res<ButtonInput<KeyCode>>,
+    mouse: Res<ButtonInput<MouseButton>>,
     script: Res<Script>,
     window: Query<&Window, With<PrimaryWindow>>,
     camera: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
     me: Single<(&Shown, &Inventory, &mut Controls, Has<Dead>), With<LocalPlayer>>,
+    phone: Option<Res<crate::phone::Phone>>,
 ) {
     let (shown, inventory, mut controls, dead) = me.into_inner();
     let held = |k: KeyCode, name: &str| keys.pressed(k) || script.held(name);
@@ -351,8 +366,14 @@ fn read_controls(
     if keys.just_pressed(KeyCode::KeyF) || script.pressed("Torch") {
         controls.torch = !controls.torch;
     }
-    // Only a flashlight in his hand shines; put away, it goes off. The dead's never.
-    controls.torch &= inventory.holds(Kind::Flashlight) && !dead;
+    // The backpack's flashlight is F's; a UV lantern shines while the left
+    // button is held. The dead's never.
+    controls.torch &= !dead;
+    controls.uv = !dead
+        && !inventory.open
+        && inventory.holds(Kind::Lantern)
+        && phone.is_none_or(|p| p.grab.is_none())
+        && (mouse.pressed(MouseButton::Left) || script.held("Lamp"));
     // The pointer is the inventory's while it is open.
     if inventory.open {
         return;
@@ -378,7 +399,13 @@ fn read_controls(
 /// The robbers this machine steps: its own, and the test crew where they live.
 type Driven = Or<(With<LocalPlayer>, (Without<Remote>, Without<Owner>))>;
 
-fn step(level: Res<Level>, mut players: Query<(&mut Player, &mut Controls), Driven>) {
+fn step(
+    level: Res<Level>,
+    barred: Res<crate::doors::Barred>,
+    mut players: Query<(&mut Player, &mut Controls), Driven>,
+) {
+    // Locked doors stop him too.
+    let solids = barred.0.as_ref().unwrap_or(&level.solids);
     for (mut player, mut controls) in &mut players {
         let thick = level.hideout(player.body.pos).is_some();
         let b = &mut player.body;
@@ -393,7 +420,7 @@ fn step(level: Res<Level>, mut players: Query<(&mut Player, &mut Controls), Driv
             controls.roll = false;
             b.start_roll();
         }
-        b.update(STEP, &level.solids);
+        b.update(STEP, solids);
     }
 }
 
@@ -551,7 +578,7 @@ fn pose(
                         .iter()
                         .any(|&k| inventory.holds(k))
                 } else {
-                    inventory.holds(Kind::Flashlight)
+                    inventory.holds(Kind::Lantern)
                 };
                 let hand = if held {
                     out
@@ -588,7 +615,7 @@ fn pose(
                 let long = cos.abs() + 1.7 * sin.abs();
                 pt.scale = vec3(m(1.0, 1.25) * long, m(1.0, 0.85), 1.0);
             }
-            Part::Bag => {
+            Part::Pack => {
                 let bob = 1.0 + 0.04 * (2.0 * b.stride).sin() * pace;
                 pt.scale = Vec3::new(bob, 1.0 / bob, 1.0) * m(1.0, 0.92);
                 pt.rotation = Quat::from_rotation_z(-0.1 * s * pace);
@@ -605,6 +632,7 @@ fn pose(
                     pt.rotation = Quat::from_rotation_z(a);
                 }
             }
+            Part::Lamp => flip(&mut pt, m(4.0, 7.0), 12.0, 0.45),
             Part::Head => {
                 let x = if sprint { 4.5 } else { m(2.0, 11.0) };
                 flip(&mut pt, x, 16.0, 0.5);
@@ -637,38 +665,60 @@ fn pose(
     }
 }
 
+type Seen<'a> = (Entity, &'a Shown, &'a Player, &'a Controls, &'a Inventory);
+
 #[allow(clippy::too_many_arguments)]
 fn follow(
-    me: Single<(Entity, &Shown, &Player, &Controls), With<LocalPlayer>>,
-    robbers: Query<(Entity, &Shown, &Player, &Controls)>,
+    me: Option<Single<Seen, With<LocalPlayer>>>,
+    sim: Option<Res<Sim>>,
+    robbers: Query<Seen>,
     mut camera: Query<&mut Transform, (With<MainCamera>, Without<Player>)>,
     wraiths: Query<&Wraith>,
     time: Res<Time>,
     world_materials: Res<WorldMaterials>,
     mut materials: ResMut<Assets<WorldMaterial>>,
 ) {
-    let (me, shown, player, controls) = *me;
+    let me = me.map(|m| *m);
+    // In the sim the camera may be free of him (and is without him), and
+    // then everything is seen.
+    let free = match (me, &sim) {
+        (None, None) => return,
+        _ => me.is_none() || sim.is_some_and(|s| s.free),
+    };
+    let Ok(mut c) = camera.single_mut() else {
+        return;
+    };
+    let eye = me.map_or(c.translation.truncate(), |m| m.1.pos);
+    if !free {
+        c.translation.x = eye.x;
+        c.translation.y = eye.y;
+    }
     // His own first, then the nearest, as many as the shader takes.
-    let mut lit: Vec<_> = robbers.iter().filter(|r| r.3.torch).collect();
-    let far = |r: &(Entity, &Shown, _, _)| (r.0 != me, r.1.pos.distance_squared(shown.pos));
-    lit.sort_by(|a, b| far(a).partial_cmp(&far(b)).unwrap());
-    let torches: Vec<_> = lit
+    let mine = me.map(|m| m.0);
+    // Each flashlight, and each UV lantern (its way twice as long, for the shader).
+    let mut lit: Vec<_> = robbers
         .iter()
-        .map(|(_, s, p, _)| {
-            s.pos
-                .extend(p.body.heading.cos())
-                .extend(p.body.heading.sin())
+        .flat_map(|(e, s, p, c, _)| {
+            [(c.torch, 1.0), (c.uv, 2.0)]
+                .into_iter()
+                .filter(|l| l.0)
+                .map(move |(_, k)| (e, s.pos, Vec2::from_angle(p.body.heading) * k))
         })
         .collect();
-    if let Ok(mut c) = camera.single_mut() {
-        c.translation.x = shown.pos.x;
-        c.translation.y = shown.pos.y;
-    }
+    lit.sort_by(|a, b| {
+        let far = |l: &(Entity, Vec2, Vec2)| (Some(l.0) != mine, l.1.distance_squared(eye));
+        far(a).partial_cmp(&far(b)).unwrap()
+    });
+    let torches: Vec<_> = lit
+        .iter()
+        .map(|&(_, at, way)| at.extend(way.x).extend(way.y))
+        .collect();
     write_params(
-        shown.pos,
-        player.body.heading,
-        controls.torch,
-        player.body.is_crouching(),
+        eye,
+        me.map_or(0.0, |m| m.2.body.heading),
+        me.is_some_and(|m| m.3.torch),
+        me.is_some_and(|m| m.2.body.is_crouching()),
+        free,
         wraiths
             .iter()
             .find_map(|w| w.flicker)
@@ -687,6 +737,8 @@ fn zoom(
     mut projection: Query<&mut Projection, With<MainCamera>>,
     mut goal: Local<Option<f32>>,
     time: Res<Time>,
+    sim: Option<Res<Sim>>,
+    bank: Option<Res<Bank>>,
 ) {
     let Ok(mut projection) = projection.single_mut() else {
         return;
@@ -699,9 +751,21 @@ fn zoom(
     if h <= 0.0 {
         return;
     }
-    // Zoomed out at most to just past his sight above and below him, and he
-    // starts there unless BB_ZOOM says otherwise.
-    let most = ortho.scale * 2.0 * (crate::sight::VIEW + 0.5) * TILE / h;
+    // Zoomed out at most to just past his sight above and below him (the
+    // whole bank in the sim), and he starts there unless BB_ZOOM says otherwise.
+    let most = match (&sim, bank) {
+        (None, _) => ortho.scale * 2.0 * (crate::sight::VIEW + 0.5) * TILE / h,
+        (Some(_), Some(b)) => {
+            let fit = (b.0.w as f32 / ortho.area.width()).max(b.0.h as f32 / h);
+            ortho.scale * 1.05 * fit * TILE
+        }
+        (Some(_), None) => return,
+    };
+    let least = if sim.is_some() {
+        0.1
+    } else {
+        0.45f32.min(most)
+    };
     let goal = goal.get_or_insert_with(|| {
         if crate::dev::env("BB_ZOOM").is_none() {
             ortho.scale = most;
@@ -715,6 +779,28 @@ fn zoom(
         };
         *goal *= 0.88f32.powf(notches);
     }
-    *goal = goal.clamp(0.45f32.min(most), most);
+    *goal = goal.clamp(least, most);
     ortho.scale += (*goal - ortho.scale) * approach(14.0, time.delta_secs());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_bush_screens_who_is_not_in_it() {
+        let bush = Aabb::new(vec2(100.0, 0.0), vec2(152.0, 52.0));
+        let level = Level {
+            solids: Solids::new(Aabb::new(Vec2::ZERO, Vec2::splat(400.0)), Vec::new()),
+            cover: Vec::new(),
+            hideouts: vec![bush],
+        };
+        let (here, there, inside) = (vec2(20.0, 26.0), vec2(300.0, 26.0), vec2(126.0, 26.0));
+        assert!(level.screened(here, there), "through it");
+        assert!(
+            !level.screened(here, inside),
+            "into it: the hideout rule decides"
+        );
+        assert!(!level.screened(here, vec2(20.0, 300.0)), "past it");
+    }
 }

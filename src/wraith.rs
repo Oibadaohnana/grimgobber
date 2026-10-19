@@ -7,17 +7,23 @@
 //! flashlights round it flicker, and after `WARN` it hunts whoever it sees or
 //! hears: its touch kills.
 //!
-//! Its name has five letters, one on each of five notes about the bank
-//! (`Note`, read by walking over it). With all five found, a robber may speak
-//! (T, `talk::Say`): the right name forces a long haunt at him and binds it
-//! (`Wraith::named`), and a bound wraith shown over a set trap is caught
-//! (`trap::Trap`), which wins the round. A wrong word costs his sanity.
+//! It is one of three kinds (`Ghost`), each showing three of six signs
+//! (`Ghost::signs`): the crew tells which from what they see (phone.rs), and
+//! catches it with that kind's tool (capture.rs, trap.rs); the wrong one
+//! enrages it (`Mind::enrage`).
 //!
-//! Its mind (`Mind`, the name in it) is the server's; the players get where
-//! it is and what it shows (`Wraith`), the notes and the footprints (`Prints`).
+//! Its name has five letters, one on each of five notes about the bank
+//! (`Note`, read by walking over it, the letter put in its place). With all
+//! five found, a robber may speak (T, `talk::Say`): the right name forces a
+//! long haunt at him. A wrong word costs his sanity.
+//!
+//! Its mind (`Mind`, its name and kind in it) is the server's; the players
+//! get where it is and what it shows (`Wraith`), the notes, the footprints
+//! (`Prints`) and the other signs (`Omen`).
 
 use crate::doors::{Leaf, Shut};
 use crate::hearing::feet;
+use crate::junk::Loose;
 use crate::map::{Map, Room, tile_centre};
 use crate::movement::{Body, STEP, Solids, Steer, TILE, approach};
 use crate::net::{Owner, sent_by};
@@ -28,9 +34,8 @@ use crate::rng::Rng;
 use crate::sanity::Sanity;
 use crate::sight::{Sight, VIEW};
 use crate::smash::Bank;
-use crate::sound::Noise;
+use crate::sound::{Clip, Noise};
 use crate::talk::Say;
-use crate::trap::Trap;
 use crate::{dev, paint};
 use bevy::prelude::*;
 use bevy_replicon::prelude::{ClientState, FromClient, Replicated};
@@ -56,6 +61,8 @@ const SIGN_FLICKER: f32 = 4.0;
 const SIGN_FLICKER_FOR: f32 = 2.5;
 /// This close in a hunt, it kills.
 const TOUCH: f32 = 0.7 * TILE;
+/// How near a noise a robber must be to have made it.
+const MADE: f32 = 1.5 * TILE;
 /// Sanity lost seeing a sign, and being near as a haunt starts.
 const SIGN_SHOCK: f32 = 5.0;
 const HAUNT_SHOCK: f32 = 15.0;
@@ -69,15 +76,17 @@ const PRINT_LASTS: f32 = 12.0;
 /// Its name spoken, it hunts this long; a wrong word costs so much sanity.
 const NAMED_HUNT: f32 = 40.0;
 const WRONG_NAME: f32 = 5.0;
-/// A robber this close reads a note; a trap this close to it, shown, takes it.
+/// A robber this close reads a note.
 const READS: f32 = 0.6 * TILE;
-const TRAPS: f32 = 0.8 * TILE;
+/// Frost lasts this long; a wail is heard this far, in tiles.
+const FROST_LASTS: f32 = 20.0;
+const WAIL: f32 = 14.0;
 /// Its name is one of these.
 const NAMES: [&str; 17] = [
     "AGNES", "EDGAR", "EDITH", "ETHEL", "HAZEL", "MABEL", "MAUDE", "CLARA", "GRETA", "IRENE",
     "SILAS", "ELIAS", "FELIX", "OSCAR", "HENRY", "NORAH", "BERTA",
 ];
-pub const NAME_LEN: usize = 5;
+const NAME_LEN: usize = 5;
 
 /// What the players get of it.
 #[derive(Component, Serialize, Deserialize)]
@@ -88,11 +97,91 @@ pub struct Wraith {
     pub shown: bool,
     /// Where the lights flicker, and how far round, in tiles.
     pub flicker: Option<(Vec2, f32)>,
-    /// The letters of its name found so far, in the order found.
-    pub letters: Vec<char>,
-    /// Its name spoken: a trap can take it.
+    /// The letters of its name, those found so far.
+    pub letters: [Option<char>; NAME_LEN],
+    /// Its name spoken.
     pub named: bool,
     pub caught: bool,
+    /// Shot down, lying still.
+    pub down: bool,
+    /// How far burned in a UV lantern's beam, in tenths.
+    pub burn: u8,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Ghost {
+    Poltergeist,
+    Shade,
+    Banshee,
+}
+
+impl Ghost {
+    pub const ALL: [Ghost; 3] = [Ghost::Poltergeist, Ghost::Shade, Ghost::Banshee];
+
+    pub fn signs(self) -> [Sign; 3] {
+        match self {
+            Ghost::Poltergeist => [Sign::Prints, Sign::Door, Sign::Thrown],
+            Ghost::Shade => [Sign::Door, Sign::Lights, Sign::Frost],
+            Ghost::Banshee => [Sign::Prints, Sign::Lights, Sign::Wail],
+        }
+    }
+
+    /// What it is caught with.
+    pub fn tool(self) -> &'static str {
+        match self {
+            Ghost::Poltergeist => "Pistol + coffer",
+            Ghost::Shade => "UV lantern",
+            Ghost::Banshee => "Net trap",
+        }
+    }
+
+    /// How it is caught.
+    pub fn catch(self) -> &'static str {
+        match self {
+            Ghost::Poltergeist => "shoot it down, seal it in a coffer",
+            Ghost::Shade => "burn it in a UV lantern's beam",
+            Ghost::Banshee => "lure it over a net trap, pull",
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Sign {
+    Prints,
+    Door,
+    Lights,
+    Thrown,
+    Frost,
+    Wail,
+}
+
+impl Sign {
+    pub const ALL: [Sign; 6] = [
+        Sign::Prints,
+        Sign::Door,
+        Sign::Lights,
+        Sign::Thrown,
+        Sign::Frost,
+        Sign::Wail,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Sign::Prints => "Footprints",
+            Sign::Door => "A door slammed",
+            Sign::Lights => "Flickering lights",
+            Sign::Thrown => "Things thrown",
+            Sign::Frost => "Frost on the floor",
+            Sign::Wail => "A wail",
+        }
+    }
+}
+
+/// Signs the players see drawn or hear: frost where a robber stands, a wail where it is.
+#[derive(Message, Clone, Serialize, Deserialize)]
+pub enum Omen {
+    Frost(Vec2),
+    Wail(Vec2),
 }
 
 /// A note with a letter of its name on it, lying where it was left.
@@ -100,6 +189,15 @@ pub struct Wraith {
 pub struct Note {
     pub at: Vec2,
     pub letter: char,
+    /// Its place in the name.
+    pub place: usize,
+}
+
+impl Wraith {
+    /// Its name, once every letter is found.
+    pub fn name(&self) -> Option<String> {
+        self.letters.iter().copied().collect()
+    }
 }
 
 /// Footprints appearing one after another: where, and which way the toes point.
@@ -108,8 +206,15 @@ pub struct Prints(pub Vec<(Vec2, f32)>);
 
 /// Its mind, the server's alone.
 #[derive(Component)]
-struct Mind {
+pub struct Mind {
     name: &'static str,
+    pub ghost: Ghost,
+    /// Shot: hits in a row, seconds till they are forgotten, and seconds left down.
+    pub hits: u32,
+    pub hit_for: f32,
+    pub down: f32,
+    /// Seconds in a UV lantern's beam.
+    pub burn: f32,
     home: Room,
     body: Body,
     /// Tile centres to go through, the next last.
@@ -129,34 +234,77 @@ struct Mind {
     /// Whom it hunts, and where he was last seen or heard.
     prey: Option<Entity>,
     last: Option<Vec2>,
+    /// It had him when he went into a hideout, so it follows him in.
+    follows: bool,
     respite: f32,
     /// Seconds left of a sign's flicker.
     flicker: f32,
 }
 
-#[derive(Clone, Copy, Debug)]
-enum Sign {
-    Prints,
-    Door,
-    Lights,
+impl Mind {
+    pub fn true_name(&self) -> &'static str {
+        self.name
+    }
+
+    /// What it is up to, for the sim.
+    pub fn state(&self, w: &Wraith) -> String {
+        let doing = match self.haunt {
+            _ if w.caught => "caught".into(),
+            Some(t) if t < WARN => format!("haunting, showing itself: hunts in {:.1} s", WARN - t),
+            Some(t) => format!("hunting, {:.0} s left", WARN + self.hunt - t),
+            None if self.respite > 0.0 => format!("roaming, no haunt for {:.0} s", self.respite),
+            None => "roaming".into(),
+        };
+        let doing = if w.down {
+            format!("shot down, up in {:.1} s", self.down)
+        } else {
+            doing
+        };
+        let named = if w.named { ", named" } else { "" };
+        format!(
+            "{}, a {:?} (home a {:?}{named})\n{doing}",
+            self.name, self.ghost, self.home.kind
+        )
+    }
 }
 
-/// A footprint, seconds since it showed (below 0: not yet).
+impl Mind {
+    /// It hunts `prey`, last at `at`, at once: a wrong tool, or shot down and up again.
+    pub fn enrage(&mut self, w: &mut Wraith, prey: Entity, at: Vec2) {
+        info!("the wraith is enraged");
+        self.haunt = Some(WARN);
+        self.hunt = HUNT;
+        self.prey = Some(prey);
+        self.last = Some(at);
+        self.path.clear();
+        self.retarget = 0.0;
+        self.down = 0.0;
+        self.hits = 0;
+        w.down = false;
+        w.shown = true;
+        w.flicker = Some((self.body.pos, HAUNT_FLICKER));
+    }
+}
+
+/// A footprint or frost, seconds since it showed (below 0: not yet): its
+/// look (left foot, right, frost) and how long it lasts.
 #[derive(Component)]
 struct Print {
     age: f32,
-    left: bool,
+    look: usize,
+    lasts: f32,
 }
 
-/// The footprints' pictures, left and right, fading in three steps.
+/// The footprints' and frost's pictures, fading in three steps.
 #[derive(Resource)]
-struct PrintLooks([[Handle<Mesh>; 3]; 2]);
+struct PrintLooks([[Handle<Mesh>; 3]; 3]);
 
 pub struct WraithPlugin;
 
 impl Plugin for WraithPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<Prints>()
+            .add_message::<Omen>()
             .add_systems(
                 FixedUpdate,
                 walk.run_if(
@@ -177,7 +325,7 @@ impl Plugin for WraithPlugin {
             );
         if crate::drawn(app) {
             app.add_systems(Startup, looks)
-                .add_systems(Update, (show, prints, age, ghosts, pale));
+                .add_systems(Update, (show, prints, omens, age, ghosts, pale));
         }
     }
 }
@@ -212,9 +360,9 @@ pub fn spawn_wraith(commands: &mut Commands, map: &Map, seed: u64) {
     // Its letters on notes, each on a free tile somewhere in the bank.
     let mut tiles: Vec<Vec2> = rooms.iter().flat_map(|r| spots(&walkable, r)).collect();
     rng.shuffle(&mut tiles);
-    let mut letters: Vec<char> = name.chars().collect();
+    let mut letters: Vec<(usize, char)> = name.chars().enumerate().collect();
     rng.shuffle(&mut letters);
-    for (&at, letter) in dev::tile("BB_NOTES")
+    for (&at, (place, letter)) in dev::tile("BB_NOTES")
         .map(|t| {
             (0..NAME_LEN)
                 .map(|i| t + vec2(i as f32 * TILE, 0.0))
@@ -224,8 +372,23 @@ pub fn spawn_wraith(commands: &mut Commands, map: &Map, seed: u64) {
         .iter()
         .zip(letters)
     {
-        commands.spawn((WorldPart, Replicated, Note { at, letter }));
+        commands.spawn((WorldPart, Replicated, Note { at, letter, place }));
     }
+    // Loose things about the rooms, for a poltergeist to throw.
+    let mut free: Vec<Vec2> = rooms.iter().flat_map(|r| spots(&walkable, r)).collect();
+    rng.shuffle(&mut free);
+    for (i, &at) in free.iter().take(crate::junk::JUNK).enumerate() {
+        let off = vec2(rng.f32() - 0.5, rng.f32() - 0.5) * 0.5 * TILE;
+        commands.spawn((WorldPart, Replicated, Loose::new(at + off, i)));
+    }
+    let ghost = dev::env("BB_GHOST")
+        .and_then(|g| {
+            Ghost::ALL
+                .into_iter()
+                .find(|k| format!("{k:?}").eq_ignore_ascii_case(&g))
+        })
+        .unwrap_or_else(|| rng.pick(&Ghost::ALL));
+    info!("the wraith is a {ghost:?}");
     commands.spawn((
         WorldPart,
         Replicated,
@@ -234,12 +397,19 @@ pub fn spawn_wraith(commands: &mut Commands, map: &Map, seed: u64) {
             heading: 0.0,
             shown: false,
             flicker: None,
-            letters: Vec::new(),
+            letters: [None; NAME_LEN],
             named: false,
             caught: false,
+            down: false,
+            burn: 0,
         },
         Mind {
             name,
+            ghost,
+            hits: 0,
+            hit_for: 0.0,
+            down: 0.0,
+            burn: 0.0,
             home,
             body: Body::new(at, 0.0),
             path: Vec::new(),
@@ -253,6 +423,7 @@ pub fn spawn_wraith(commands: &mut Commands, map: &Map, seed: u64) {
             retarget: 0.0,
             prey: None,
             last: None,
+            follows: false,
             respite: 0.0,
             flicker: 0.0,
         },
@@ -319,8 +490,8 @@ fn walk(
                 }
             }
         }
-        // Shown and still while it warns.
-        let still = m.haunt.is_some_and(|t| t < WARN);
+        // Shown and still while it warns, and while it lies shot down.
+        let still = m.haunt.is_some_and(|t| t < WARN) || m.down > 0.0;
         let was = m.body.pos;
         let mut none = Vec::new();
         let path = if still { &mut none } else { &mut m.path };
@@ -348,6 +519,7 @@ fn end_haunt(m: &mut Mind, w: &mut Wraith) {
     m.haunt = None;
     m.prey = None;
     m.last = None;
+    m.follows = false;
     m.path.clear();
     m.respite = RESPITE;
     w.shown = false;
@@ -364,9 +536,10 @@ fn sense(
     mut noises: MessageReader<Noise>,
     mut robbers: Query<(Entity, &Player, &Controls, &mut Sanity), Without<Dead>>,
     mut leaves: Query<&mut Leaf>,
-    mut traps: Query<&mut Trap>,
     mut wraiths: Query<(&mut Mind, &mut Wraith)>,
+    mut loose: Query<&mut Loose>,
     mut prints: MessageWriter<Prints>,
+    mut omens: MessageWriter<Omen>,
     mut commands: Commands,
 ) {
     let dt = time.delta_secs();
@@ -393,12 +566,37 @@ fn sense(
                 w.flicker = None;
             }
         }
+        m.hit_for -= dt;
+        if m.hit_for <= 0.0 {
+            m.hits = 0;
+        }
+        // Down, it lies still till it gets up, enraged, at whoever downed it.
+        if m.down > 0.0 {
+            m.down -= dt;
+            if m.down <= 0.0
+                && let (Some(prey), Some(last)) = (m.prey, m.last)
+            {
+                m.enrage(w, prey, last);
+            }
+            continue;
+        }
         if let Some(t) = &mut m.haunt {
             *t += dt;
             if *t >= WARN + m.hunt {
                 end_haunt(m, w);
                 continue;
             }
+        }
+        // A banshee goes to see what it hears.
+        let ear = sight.index(at);
+        if m.ghost == Ghost::Banshee
+            && m.haunt.is_none()
+            && let Some(&(to, _)) = sounds.iter().find(|&&(s, loud)| {
+                s.distance(at) < (loud + 1.0) * 1.5 * TILE
+                    && ear.is_some_and(|i| sight.carry(s, loud, doors)[i] > 0.0)
+            })
+        {
+            m.path = walkable.path(at, to);
         }
         if m.haunt.is_none() && m.gap > 0.0 {
             continue;
@@ -407,18 +605,6 @@ fn sense(
 
         if let Some(t) = m.haunt {
             w.flicker = Some((at, HAUNT_FLICKER));
-            // Bound and shown, over a set trap: caught.
-            if w.named
-                && let Some(mut trap) = traps
-                    .iter_mut()
-                    .find(|t| !t.sprung && t.at.distance(at) < TRAPS)
-            {
-                info!("the wraith is caught");
-                trap.sprung = true;
-                end_haunt(m, w);
-                w.caught = true;
-                continue;
-            }
             if t < WARN {
                 continue;
             }
@@ -432,9 +618,18 @@ fn sense(
                 .iter()
                 .find(|n| Some(n.0) == m.prey)
                 .or(noticed.first());
-            if let Some(&(e, p)) = seen {
-                m.prey = Some(e);
-                m.last = Some(p);
+            let hiding = m
+                .prey
+                .and_then(|e| robbers.get(e).ok())
+                .map(|r| r.1.body.pos);
+            match (seen, hiding) {
+                (Some(&(e, p)), _) => {
+                    m.prey = Some(e);
+                    m.last = Some(p);
+                    m.follows = true;
+                }
+                (None, Some(p)) if m.follows && level.hideout(p).is_some() => m.last = Some(p),
+                _ => m.follows = false,
             }
             m.retarget -= dt;
             if m.retarget <= 0.0 {
@@ -479,7 +674,7 @@ fn sense(
             }
             continue;
         }
-        // A sign where he can see it.
+        // A sign of its kind where he can see it, if one can be shown there.
         let door = leaves
             .iter_mut()
             .filter(|l| {
@@ -491,12 +686,25 @@ fn sense(
         let mut way: Vec<Vec2> = walkable.path(at, p).into_iter().rev().collect();
         way.insert(0, at);
         let trail = footprints(&way, p);
-        let mut signs = vec![Sign::Lights];
-        if door.is_some() {
-            signs.push(Sign::Door);
-        }
-        if trail.len() >= 4 {
-            signs.push(Sign::Prints);
+        let thing = loose
+            .iter_mut()
+            .filter(|l| {
+                l.at.distance(p) < 6.0 * TILE && sight.seen(p, l.at, VIEW, false, doors) > 0.3
+            })
+            .min_by(|a, b| a.at.distance(p).total_cmp(&b.at.distance(p)));
+        let signs: Vec<Sign> = m
+            .ghost
+            .signs()
+            .into_iter()
+            .filter(|s| match s {
+                Sign::Prints => trail.len() >= 4,
+                Sign::Door => door.is_some(),
+                Sign::Thrown => thing.is_some(),
+                _ => true,
+            })
+            .collect();
+        if signs.is_empty() {
+            continue;
         }
         let sign = m.rng.pick(&signs);
         info!("the wraith shows a sign: {sign:?}");
@@ -516,10 +724,27 @@ fn sense(
                 w.flicker = Some((p, SIGN_FLICKER));
                 p
             }
+            // Flung at him, landing a tile short.
+            Sign::Thrown => {
+                let mut thing = thing.unwrap();
+                let short = p + (thing.at - p).normalize_or_zero() * TILE;
+                let to = crate::throw::landing(thing.at, short, &level.solids);
+                thing.fling(to);
+                to
+            }
+            Sign::Frost => {
+                omens.write(Omen::Frost(p));
+                p
+            }
+            Sign::Wail => {
+                omens.write(Omen::Wail(at));
+                at
+            }
         };
         for (_, r, _, mut s) in &mut robbers {
             let b = &r.body;
-            if sight.seen(b.pos, seen_at, VIEW, b.is_crouching(), doors) > 0.5 {
+            let heard = sign == Sign::Wail && b.pos.distance(at) < WAIL * TILE;
+            if heard || sight.seen(b.pos, seen_at, VIEW, b.is_crouching(), doors) > 0.5 {
                 s.lose(SIGN_SHOCK);
             }
         }
@@ -536,7 +761,7 @@ fn read(
     for (e, note) in &notes {
         if robbers.iter().any(|p| p.body.pos.distance(note.at) < READS) {
             for mut w in &mut wraiths {
-                w.letters.push(note.letter);
+                w.letters[note.place] = Some(note.letter);
             }
             commands.entity(e).despawn();
         }
@@ -568,7 +793,7 @@ fn hear(
             continue;
         };
         for (mut m, mut w) in &mut wraiths {
-            if w.caught || w.letters.len() < NAME_LEN {
+            if w.caught || w.name().is_none() {
                 continue;
             }
             if !message.0.trim().eq_ignore_ascii_case(m.name) {
@@ -614,28 +839,35 @@ fn notice(
                     .distance(p)
                     .total_cmp(&b.1.body.pos.distance(p))
             })
-            .map(|r| r.0)
+            .map(|r| (r.0, r.1.body.pos.distance(p)))
     };
+    // A noise gives away only who made it: a coin's landing or the breaker
+    // nobody.
     let noisy: Vec<Entity> = sounds
         .iter()
         .filter(|&&(p, loud)| carries(p, loud))
-        .filter_map(|&(p, _)| nearest_to(p))
+        .filter_map(|&(p, _)| nearest_to(p).filter(|r| r.1 < MADE))
+        .map(|r| r.0)
         .collect();
     let mut noticed: Vec<(Entity, Vec2)> = robbers
         .iter()
         .filter(|(e, r, c, _)| {
             let b = &r.body;
-            let reach = if c.torch || sight.lit_at(b.pos) {
+            let reach = if c.torch || c.uv || sight.lit_at(b.pos) {
                 SEES
             } else {
                 SEES_DARK
             };
-            let hidden =
-                level.hideout(b.pos).is_some_and(|h| !h.contains(at)) && m.prey != Some(*e);
+            // In a bush or thicket he is not seen, and none is seen through:
+            // a hunt follows him in only if it had him as he went (`follows`).
+            let hidden = level.hideout(b.pos).is_some_and(|h| !h.contains(at));
             let seen = !hidden
+                && !level.screened(b.pos, at)
                 && b.pos.distance(at) < reach * TILE
                 && sight.seen(b.pos, at, reach, b.is_crouching(), doors) > 0.5;
-            seen || noisy.contains(e) || carries(b.pos, feet(b))
+            // A bush hushes his feet.
+            let heard = level.hideout(b.pos).is_none() && carries(b.pos, feet(b));
+            seen || heard || noisy.contains(e)
         })
         .map(|(e, r, ..)| (e, r.body.pos))
         .collect();
@@ -688,13 +920,40 @@ pub fn dress(
 }
 
 /// Shown only in a haunt, repainted every frame then: it never holds still.
+/// Shot down, it lies flat; burning, it shrinks; caught, it is drawn into
+/// the trap, shrinking away. In the sim it is always drawn, pale while it
+/// does not show itself.
 fn show(
     time: Res<Time>,
+    sim: Option<Res<crate::sim::Sim>>,
+    world_materials: Res<WorldMaterials>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut wraiths: Query<(&Wraith, &Mesh2d, &mut Transform, &mut Visibility)>,
+    mut wraiths: Query<(
+        &Wraith,
+        &Mesh2d,
+        &mut MeshMaterial2d<WorldMaterial>,
+        &mut Transform,
+        &mut Visibility,
+    )>,
 ) {
-    for (w, mesh, mut t, mut vis) in &mut wraiths {
-        let want = if w.shown {
+    for (w, mesh, mut material, mut t, mut vis) in &mut wraiths {
+        if w.caught {
+            t.scale *= 1.0 - approach(3.0, time.delta_secs());
+        } else {
+            let k = 1.0 - 0.05 * w.burn as f32;
+            t.scale = vec3(k, if w.down { 0.45 * k } else { k }, 1.0);
+        }
+        if sim.is_some() {
+            let m = if w.shown {
+                things_material(&world_materials)
+            } else {
+                ghost_material(&world_materials)
+            };
+            if material.0 != m {
+                material.0 = m;
+            }
+        }
+        let want = if (w.shown || sim.is_some()) && t.scale.x > 0.05 {
             Visibility::Inherited
         } else {
             Visibility::Hidden
@@ -704,13 +963,14 @@ fn show(
         }
         let at = t.translation.truncate();
         let to = if at.distance(w.pos) < 2.0 * TILE {
-            at + (w.pos - at) * approach(20.0, time.delta_secs())
+            let rate = if w.caught { 6.0 } else { 20.0 };
+            at + (w.pos - at) * approach(rate, time.delta_secs())
         } else {
             w.pos
         };
         t.translation = to.extend(9.5);
         t.rotation = Quat::from_rotation_z(w.heading);
-        if w.shown
+        if *vis != Visibility::Hidden
             && let Some(mut m) = meshes.get_mut(&mesh.0)
         {
             *m = paint::wraith(time.elapsed_secs());
@@ -719,8 +979,12 @@ fn show(
 }
 
 fn looks(mut meshes: ResMut<Assets<Mesh>>, mut commands: Commands) {
-    let mut fading = |left| [1.0, 0.6, 0.3].map(|k| meshes.add(paint::footprint(left, k)));
-    commands.insert_resource(PrintLooks([fading(true), fading(false)]));
+    let mut fading = |paint: &dyn Fn(f32) -> Mesh| [1.0, 0.6, 0.3].map(|k| meshes.add(paint(k)));
+    commands.insert_resource(PrintLooks([
+        fading(&|k| paint::footprint(true, k)),
+        fading(&|k| paint::footprint(false, k)),
+        fading(&paint::frost),
+    ]));
 }
 
 fn prints(
@@ -731,14 +995,15 @@ fn prints(
 ) {
     for Prints(trail) in trails.read() {
         for (i, &(at, toes)) in trail.iter().enumerate() {
-            let left = i % 2 == 0;
+            let look = i % 2;
             commands.spawn((
                 WorldPart,
                 Print {
                     age: -(i as f32) * PRINT_EVERY,
-                    left,
+                    look,
+                    lasts: PRINT_LASTS,
                 },
-                Mesh2d(looks.0[left as usize][0].clone()),
+                Mesh2d(looks.0[look][0].clone()),
                 MeshMaterial2d(things_material(&world_materials)),
                 Transform::from_translation(at.extend(0.5))
                     .with_rotation(Quat::from_rotation_z(toes)),
@@ -748,7 +1013,43 @@ fn prints(
     }
 }
 
-/// Footprints show one by one, fade and go.
+/// Frost spreads where it was seen; a wail is heard.
+fn omens(
+    mut omens: MessageReader<Omen>,
+    looks: Res<PrintLooks>,
+    world_materials: Res<WorldMaterials>,
+    mut noises: MessageWriter<Noise>,
+    mut commands: Commands,
+) {
+    for omen in omens.read() {
+        match *omen {
+            Omen::Frost(at) => {
+                commands.spawn((
+                    WorldPart,
+                    Print {
+                        age: 0.0,
+                        look: 2,
+                        lasts: FROST_LASTS,
+                    },
+                    Mesh2d(looks.0[2][0].clone()),
+                    MeshMaterial2d(things_material(&world_materials)),
+                    Transform::from_translation(at.extend(0.4))
+                        .with_rotation(Quat::from_rotation_z(paint::noise1(at.x) * TAU)),
+                    Visibility::Hidden,
+                ));
+            }
+            Omen::Wail(at) => {
+                noises.write(Noise {
+                    clip: Some(Clip::Wail),
+                    at,
+                    loud: 0.0,
+                });
+            }
+        }
+    }
+}
+
+/// Footprints and frost show, fade and go.
 fn age(
     time: Res<Time>,
     looks: Res<PrintLooks>,
@@ -757,12 +1058,12 @@ fn age(
 ) {
     for (e, mut p, mut mesh, mut vis) in &mut prints {
         p.age += time.delta_secs();
-        if p.age >= PRINT_LASTS {
+        if p.age >= p.lasts {
             commands.entity(e).despawn();
         } else if p.age >= 0.0 {
             *vis = Visibility::Inherited;
-            let step = ((p.age / PRINT_LASTS) * 3.0) as usize;
-            let look = &looks.0[p.left as usize][step.min(2)];
+            let step = ((p.age / p.lasts) * 3.0) as usize;
+            let look = &looks.0[p.look][step.min(2)];
             if mesh.0 != *look {
                 mesh.0 = look.clone();
             }
@@ -825,6 +1126,14 @@ fn pale(
 mod tests {
     use super::*;
     use crate::map::{RoomKind, generate, tile_of};
+
+    #[test]
+    fn three_signs_tell_the_kind() {
+        for g in Ghost::ALL {
+            let shows = |o: &&Ghost| g.signs().iter().all(|s| o.signs().contains(s));
+            assert_eq!(Ghost::ALL.iter().filter(shows).count(), 1, "{g:?}");
+        }
+    }
 
     #[test]
     fn a_sane_robber_is_seldom_haunted() {

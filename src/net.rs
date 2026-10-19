@@ -3,17 +3,22 @@
 //! replicates it; each player's robber moves on his own machine and is sent
 //! up every step, so his own feet never wait for the line.
 
+use crate::capture::{Seal, Shot};
 use crate::crew::{Crewmate, Leave, Look, Ready, SetLook};
 use crate::door::{Answer, Asking, FIRST, IDLE};
 use crate::doors::Leaf;
+use crate::end::Ended;
 use crate::inventory::Inventory;
+use crate::junk::Loose;
 use crate::movement::Body;
 use crate::player::{Controls, Dead, LocalPlayer, Player};
+use crate::power::{Flip, Power, Reset};
 use crate::sanity::Sanity;
 use crate::sound::Noise;
 use crate::talk::Say;
-use crate::trap::{SetTrap, TakeTrap, Trap};
-use crate::wraith::{Note, Prints, Wraith};
+use crate::throw::Toss;
+use crate::trap::{Pull, SetTrap, TakeTrap, Trap};
+use crate::wraith::{Note, Omen, Prints, Wraith};
 use bevy::ecs::component::Mutable;
 use bevy::prelude::*;
 use bevy_replicon::bytes::Bytes;
@@ -34,7 +39,9 @@ use std::time::SystemTime;
 
 pub const PORT: u16 = 8794;
 /// Bump when what crosses the line changes: older builds are refused.
-pub const PROTOCOL: u64 = 6;
+pub const PROTOCOL: u64 = 12;
+/// The game's version (Cargo.toml's), and the protocol it speaks.
+pub const VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"));
 const MAX_PLAYERS: usize = 6;
 
 /// The bank's seed, on a replicated entity: a client builds the same bank.
@@ -54,6 +61,7 @@ pub struct Joined(u64);
 struct Moved {
     body: Body,
     torch: bool,
+    uv: bool,
 }
 
 /// His things, sent up when they change.
@@ -73,6 +81,8 @@ pub enum Mode {
     Title,
     Alone,
     Online(Option<String>),
+    /// `--sim`: a bank alone to try the wraith in (sim.rs).
+    Sim,
 }
 
 /// The title screen's line: what it waits on, or why it is back.
@@ -88,6 +98,11 @@ fn arg(flag: &str) -> Option<String> {
     let args: Vec<String> = std::env::args().collect();
     let i = args.iter().position(|a| a == flag)?;
     Some(args.get(i + 1).cloned().unwrap_or_default())
+}
+
+/// `--sim`: a bank alone to try the wraith in.
+pub fn sim() -> bool {
+    std::env::args().any(|a| a == "--sim")
 }
 
 /// `--serve [port]`: run the front door (door.rs) instead of a game.
@@ -149,6 +164,8 @@ impl Plugin for NetPlugin {
             .replicate::<Wraith>()
             .replicate::<Note>()
             .replicate::<Trap>()
+            .replicate::<Loose>()
+            .replicate::<Power>()
             .replicate::<Crewmate>()
             .replicate::<Look>()
             .replicate::<Sanity>()
@@ -158,11 +175,19 @@ impl Plugin for NetPlugin {
             .add_client_message::<Say>(Channel::Ordered)
             .add_client_message::<SetTrap>(Channel::Ordered)
             .add_client_message::<TakeTrap>(Channel::Ordered)
+            .add_client_message::<Pull>(Channel::Ordered)
+            .add_client_message::<Shot>(Channel::Ordered)
+            .add_client_message::<Seal>(Channel::Ordered)
+            .add_client_message::<Toss>(Channel::Ordered)
+            .add_client_message::<Flip>(Channel::Ordered)
+            .add_client_message::<Reset>(Channel::Ordered)
             .add_client_message::<SetLook>(Channel::Ordered)
             .add_client_message::<Ready>(Channel::Ordered)
             .add_client_message::<Leave>(Channel::Ordered)
             .add_server_message::<Noise>(Channel::Unordered)
             .add_server_message::<Prints>(Channel::Unordered)
+            .add_server_message::<Omen>(Channel::Unordered)
+            .add_server_message::<Ended>(Channel::Ordered)
             .register_marker::<LocalPlayer>()
             .set_marker_fns::<LocalPlayer, Player>(ours::<Player>, default_remove::<Player>)
             .set_marker_fns::<LocalPlayer, Controls>(ours::<Controls>, default_remove::<Controls>)
@@ -185,7 +210,12 @@ impl Plugin for NetPlugin {
             .add_systems(
                 PostUpdate,
                 (
-                    (pass_on::<Noise>, pass_on::<Prints>)
+                    (
+                        pass_on::<Noise>,
+                        pass_on::<Prints>,
+                        pass_on::<Omen>,
+                        pass_on::<Ended>,
+                    )
                         .before(ServerSystems::Send)
                         .run_if(in_state(ServerState::Running)),
                     send.before(ClientSystems::Send)
@@ -434,6 +464,7 @@ fn moved(
         for (_, mut player, mut controls) in robbers.iter_mut().filter(|r| Some(r.0.0) == id) {
             player.body = message.body.clone();
             controls.torch = message.torch;
+            controls.uv = message.uv;
         }
     }
 }
@@ -461,7 +492,7 @@ fn pass_on<M: Message + Clone>(mut made: MessageReader<M>, mut out: MessageWrite
     }
 }
 
-type Mine<'a> = (Ref<'a, Player>, &'a Controls, Ref<'a, Inventory>);
+type Mine<'a> = (Ref<'a, Player>, Ref<'a, Controls>, Ref<'a, Inventory>);
 
 fn send(
     me: Single<Mine, With<LocalPlayer>>,
@@ -469,10 +500,12 @@ fn send(
     mut packs: MessageWriter<Packed>,
 ) {
     let (player, controls, inventory) = *me;
-    if player.is_changed() {
+    // Every change of his lights too, standing still or not.
+    if player.is_changed() || controls.is_changed() {
         moves.write(Moved {
             body: player.body.clone(),
             torch: controls.torch,
+            uv: controls.uv,
         });
     }
     if inventory.is_changed() {

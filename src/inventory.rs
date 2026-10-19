@@ -9,26 +9,30 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum Kind {
     Crowbar,
-    Flashlight,
     Lockpicks,
     Coin,
     /// Its `count` is the rounds in its magazine.
     Pistol,
     Rounds,
-    /// For the wraith: set on the floor, it takes it once its name is spoken.
+    /// The capture tools, from the van. The trap, set on the floor, becomes its `Trigger`.
     Trap,
+    Trigger,
+    Lantern,
+    Coffer,
 }
 
 impl Kind {
     pub fn name(self) -> &'static str {
         match self {
             Kind::Crowbar => "Crowbar",
-            Kind::Flashlight => "Flashlight",
             Kind::Lockpicks => "Lockpicks",
             Kind::Coin => "Coins",
             Kind::Pistol => "Pistol",
             Kind::Rounds => "Pistol rounds",
             Kind::Trap => "Ghost trap",
+            Kind::Trigger => "Trap trigger",
+            Kind::Lantern => "UV lantern",
+            Kind::Coffer => "Coffer",
         }
     }
 
@@ -46,9 +50,10 @@ impl Kind {
     pub fn size(self) -> IVec2 {
         match self {
             Kind::Crowbar => ivec2(4, 1),
-            Kind::Flashlight | Kind::Pistol => ivec2(2, 1),
-            Kind::Lockpicks | Kind::Coin | Kind::Rounds => ivec2(1, 1),
-            Kind::Trap => ivec2(2, 2),
+            Kind::Pistol => ivec2(2, 1),
+            Kind::Lockpicks | Kind::Coin | Kind::Rounds | Kind::Trigger => ivec2(1, 1),
+            Kind::Trap | Kind::Lantern => ivec2(2, 2),
+            Kind::Coffer => ivec2(3, 2),
         }
     }
 }
@@ -101,7 +106,6 @@ impl Default for Inventory {
         };
         Inventory {
             items: vec![
-                item(Kind::Flashlight, At::Hands),
                 item(Kind::Crowbar, At::Grid(ivec2(0, 0))),
                 item(Kind::Lockpicks, At::Grid(ivec2(0, 1))),
                 Item {
@@ -116,9 +120,8 @@ impl Default for Inventory {
                     count: 16,
                     ..item(Kind::Rounds, At::Grid(ivec2(4, 1)))
                 },
-                item(Kind::Trap, At::Grid(ivec2(6, 2))),
             ],
-            quick: [Some(1), Some(0), Some(6), Some(3)],
+            quick: [Some(0), Some(3), None, Some(2)],
             open: false,
         }
     }
@@ -193,6 +196,21 @@ impl Inventory {
         false
     }
 
+    /// Item `id` made a `kind`, where it lies or wherever it fits; `false`,
+    /// and unchanged, if nowhere.
+    pub fn change(&mut self, id: usize, kind: Kind) -> bool {
+        let was = self.items[id].kind;
+        self.items[id].kind = kind;
+        let ok = match self.items[id].at {
+            At::Grid(cell) => self.fits(id, self.items[id].turned, cell) || self.stow(id),
+            At::Hands => true,
+        };
+        if !ok {
+            self.items[id].kind = was;
+        }
+        ok
+    }
+
     /// One of item `id` used up, the item gone with the last.
     pub fn use_one(&mut self, id: usize) {
         self.items[id].count -= 1;
@@ -238,6 +256,12 @@ impl Inventory {
         false
     }
 
+    /// Item `id` onto the first free quick slot, if one is.
+    pub fn bind(&mut self, id: usize) -> bool {
+        let free = self.quick.iter_mut().find(|q| q.is_none());
+        free.map(|q| *q = Some(id)).is_some()
+    }
+
     /// A quick slot: its item into the hands, or out of them again.
     pub fn quick(&mut self, slot: usize) {
         let Some(id) = self.quick[slot] else {
@@ -259,17 +283,17 @@ mod tests {
     fn items_keep_to_their_cells_and_quick_slots_swap_the_hands() {
         let mut inv = Inventory::default();
         // The crowbar (4×1) lies across the top row, the lockpicks under it.
-        assert!(!inv.fits(2, false, ivec2(2, 0)));
-        assert!(inv.fits(2, false, ivec2(6, 1)));
-        assert!(!inv.fits(1, false, ivec2(5, 2)), "past the right edge");
-        assert!(!inv.fits(1, true, ivec2(0, 2)), "standing, it sticks out");
-        // 1 takes the crowbar; the flashlight goes back into the grid.
+        assert!(!inv.fits(1, false, ivec2(2, 0)));
+        assert!(inv.fits(1, false, ivec2(6, 1)));
+        assert!(!inv.fits(0, false, ivec2(5, 2)), "past the right edge");
+        assert!(!inv.fits(0, true, ivec2(0, 2)), "standing, it sticks out");
+        // 1 takes the crowbar; 2 the pistol, the crowbar back into the grid.
         inv.quick(0);
         assert!(inv.holds(Kind::Crowbar));
-        assert!(matches!(inv.items[0].at, At::Grid(_)));
-        // 2 the flashlight, and 2 again puts it away.
         inv.quick(1);
-        assert!(inv.holds(Kind::Flashlight));
+        assert!(inv.holds(Kind::Pistol));
+        assert!(matches!(inv.items[0].at, At::Grid(_)));
+        // 2 again puts it away.
         inv.quick(1);
         assert_eq!(inv.held(), None);
         // The coins: thrown one by one, then gone, and slot 4 with them.
@@ -283,8 +307,15 @@ mod tests {
         // Added: coins onto the stack, a new thing where it goes.
         let mut inv = Inventory::default();
         assert!(inv.add(Kind::Coin, 2, None));
-        assert_eq!(inv.items[3].count, 5);
+        assert_eq!(inv.items[2].count, 5);
         assert!(inv.add(Kind::Lockpicks, 1, Some(At::Grid(ivec2(7, 4)))));
         assert_eq!(inv.items.last().unwrap().at, At::Grid(ivec2(7, 4)));
+        // The trap set turns into its trigger in his hands, and back on its slot.
+        assert!(inv.add(Kind::Trap, 1, None) && inv.bind(6));
+        inv.quick(2);
+        assert!(inv.change(inv.held().unwrap(), Kind::Trigger));
+        assert!(inv.holds(Kind::Trigger));
+        inv.quick(2);
+        assert!(inv.change(6, Kind::Trap) && inv.quick[2] == Some(6));
     }
 }

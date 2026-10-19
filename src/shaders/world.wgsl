@@ -10,7 +10,8 @@ struct Params {
     map: vec4<f32>, // the map's size in tiles xy, a tile in world units z, torch count w
     misc: vec4<f32>, // mode, lamp count, flashlight on (1/0), crouched (1/0)
     flicker: vec4<f32>, // lights flickering: centre xy, reach z (0: none), how bright now w
-    torches: array<vec4<f32>, 6>, // every flashlight on, as `eye`
+    view: vec4<f32>, // x: everything seen (the sim's free camera)
+    torches: array<vec4<f32>, 6>, // every flashlight on, as `eye` (its way twice as long: a UV lantern)
     lights: array<vec4<f32>, 256>, // two a lamp: (x, y, reach, power), (r, g, b, 0)
 };
 
@@ -60,6 +61,7 @@ const LENS_AHEAD: f32 = 16.0;
 const CONE_IN: f32 = 0.30;
 const CONE_OUT: f32 = 0.52;
 const TORCH_COLOUR: vec3<f32> = vec3<f32>(1.0, 0.96, 0.86);
+const UV_COLOUR: vec3<f32> = vec3<f32>(0.55, 0.3, 1.0);
 const TORCH_POWER: f32 = 1.5;
 // In tiles: the flashlight's reach, and sight in the dark and at most.
 const TORCH_REACH: f32 = 15.0;
@@ -282,8 +284,9 @@ fn flickered(p: vec2<f32>) -> f32 {
     return mix(1.0, P.flicker.w, near);
 }
 
-fn one_torch(t: vec4<f32>, w: vec2<f32>, dst: Spot) -> vec3<f32> {
-    let ahead = t.zw;
+fn one_torch(lamp: vec4<f32>, w: vec2<f32>, dst: Spot) -> vec3<f32> {
+    let ahead = normalize(lamp.zw);
+    let t = vec4<f32>(lamp.xy, ahead);
     let lens = t.xy + ahead * LENS_AHEAD;
     let off = w - lens;
     let d = length(off);
@@ -306,7 +309,7 @@ fn one_torch(t: vec4<f32>, w: vec2<f32>, dst: Spot) -> vec3<f32> {
         let run = trace(lens + side * f32(k), w, src, dst, false);
         clear += clear_share(run.x) * select(1.0, 0.85, run.y > 1.0);
     }
-    return TORCH_COLOUR * (power * clear / 3.0);
+    return select(TORCH_COLOUR, UV_COLOUR, dot(lamp.zw, lamp.zw) > 2.0) * (power * clear / 3.0);
 }
 
 // A wall's top is lit as the floor just past its nearest open face: a ray to
@@ -361,7 +364,7 @@ fn seen(w: vec2<f32>, dst: Spot) -> f32 {
     let eye = P.eye.xy;
     let off = w - eye;
     let dist = length(off);
-    if dist < 20.0 {
+    if dist < 20.0 || P.view.x > 0.5 {
         return 1.0;
     }
     let tile = P.map.z;

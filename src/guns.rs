@@ -1,7 +1,8 @@
 //! Guns. The robber's pistol, in hand, aims at the pointer as bims' does
 //! (`player::gun_line`), a reticle on it; a left click fires, R reloads from
 //! his rounds. A shot stops at walls, windows, tall things and shut doors,
-//! or at the first body it reaches, and is heard `LOUD` tiles off.
+//! or at the first body it reaches, and is heard `LOUD` tiles off. The
+//! server traces it again for the wraith (`capture::Shot`).
 
 use crate::doors::Shut;
 use crate::inventory::{Inventory, Kind};
@@ -11,13 +12,12 @@ use crate::player::{Controls, Level, Living, LocalPlayer, Player, gun_line};
 use crate::sight::Sight;
 use crate::sound::{Clip, Noise};
 use bevy::prelude::*;
-use bevy_replicon::prelude::ClientState;
 
 const MAG: u32 = 8;
 const RELOAD: f32 = 1.4;
 const EVERY: f32 = 0.22;
 const RANGE: f32 = 20.0;
-const LOUD: f32 = 26.0;
+pub const LOUD: f32 = 26.0;
 /// How near a body's middle a shot must pass to hit it.
 const HIT: f32 = 16.0;
 /// The robber's pistol's state.
@@ -49,11 +49,7 @@ impl Plugin for GunsPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, spawn).add_systems(
             Update,
-            (
-                (holster, trigger).run_if(in_state(ClientState::Disconnected)),
-                fade,
-                reticle,
-            )
+            (holster, trigger, fade, reticle)
                 .chain()
                 .distributive_run_if(resource_exists::<Level>.and_then(resource_exists::<Sight>)),
         );
@@ -84,7 +80,7 @@ fn spawn(
 
 /// A shot from `from` along `dir`: where it stops, and which of `bodies`
 /// (their middles) it hit there, if one.
-fn shoot(
+pub fn shoot(
     sight: &Sight,
     doors: &[u8],
     from: Vec2,
@@ -155,6 +151,7 @@ fn trigger(
     looks: Res<Looks>,
     shut: Res<Shut>,
     mut noises: MessageWriter<Noise>,
+    mut shots: MessageWriter<crate::capture::Shot>,
     mut commands: Commands,
 ) {
     let (controls, player, mut inventory, mut gun) = me.into_inner();
@@ -210,11 +207,13 @@ fn trigger(
     let (from, dir) = gun_line(b.pos, b.heading, pointer);
     let (to, _) = shoot(&sight, &shut.0, from, dir, &[]);
     streak(&mut commands, &looks, from, to);
+    // Heard by the wraith on the server, from the `Shot`.
     noises.write(Noise {
         clip: Some(Clip::Shot),
         at: from,
-        loud: LOUD,
+        loud: 0.0,
     });
+    shots.write(crate::capture::Shot { from, dir });
     inventory.items[id].count -= 1;
     gun.cool = EVERY;
 }

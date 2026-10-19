@@ -1,10 +1,10 @@
 //! Talking to the wraith: with every letter of its name found, T opens a box
-//! to type a word in, Enter speaks it (`Say`, to the server, which judges
+//! with its name in it (to be changed at will), Enter speaks it (`Say`, to the server, which judges
 //! it), Esc closes it. While it is open, keys and clicks are its alone.
 
 use crate::dev::Script;
 use crate::player::Living;
-use crate::wraith::{NAME_LEN, Wraith};
+use crate::wraith::Wraith;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -47,9 +47,7 @@ pub fn talk(
     mut box_: ResMut<Talk>,
     mut say: MessageWriter<Say>,
 ) {
-    let known = wraiths
-        .iter()
-        .any(|w| w.letters.len() >= NAME_LEN && !w.caught);
+    let known = wraiths.iter().find_map(|w| w.name().filter(|_| !w.caught));
     if script.pressed("Say")
         && let Some(word) = crate::dev::env("BB_SAY")
     {
@@ -57,9 +55,12 @@ pub fn talk(
     }
     if !box_.open {
         typed.clear();
-        if (keys.just_pressed(KeyCode::KeyT) || script.pressed("Talk")) && known && me.is_some() {
+        if (keys.just_pressed(KeyCode::KeyT) || script.pressed("Talk"))
+            && let Some(name) = known
+            && me.is_some()
+        {
             box_.open = true;
-            box_.text.clear();
+            box_.text = name;
             keys.reset_all();
         }
         return;
@@ -86,7 +87,7 @@ pub fn talk(
     }
     // Nothing else hears the keys while it is open.
     keys.reset_all();
-    mouse.reset_all();
+    mouse.clear_just_pressed(MouseButton::Left);
 }
 
 fn spawn(mut commands: Commands) {

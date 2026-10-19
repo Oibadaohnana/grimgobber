@@ -737,13 +737,15 @@ pub struct RobberParts {
     pub foot: Mesh,
     /// A knee seen from above, shown crouched.
     pub knee: Mesh,
-    pub bag: Mesh,
+    /// The backpack, its straps over his shoulders.
+    pub pack: Mesh,
     pub torso: Mesh,
     /// A sleeve from the shoulder along `+x`, 15 to the glove: stretched to it.
     pub arm: Mesh,
     pub glove: Mesh,
     pub crowbar: Mesh,
-    pub torch: Mesh,
+    /// The flashlight strapped to it, on his left shoulder, and its lens lit.
+    pub lamp: Mesh,
     pub lens: Mesh,
     pub head: Mesh,
     pub streak: Mesh,
@@ -753,6 +755,58 @@ const SKIN: Hex = hex(0xd8a47a);
 const BEANIE: Hex = hex(0x1c1c22);
 const STRIPE_LIGHT: Hex = hex(0xe6e0d2);
 const BURLAP: Hex = hex(0xb08a54);
+
+/// A light switch on a wall: a plate, its toggle up (on) or down, a small
+/// glowing dot so it is found in the dark.
+pub fn switch(on: bool) -> Mesh {
+    let mut g = Painter::default();
+    g.rounded(Vec2::ZERO, vec2(4.5, 6.0), 1.5, hex(0x2a2c30));
+    g.rounded(Vec2::ZERO, vec2(3.6, 5.1), 1.2, hex(0xd8d4c8));
+    let y = if on { 1.6 } else { -1.6 };
+    g.rect(vec2(0.0, y), vec2(1.6, 2.2), 0.0, hex(0x8a8678));
+    let led = if on { hex(0x6aff8a) } else { hex(0xffb030) };
+    g.circle(vec2(0.0, -4.0), 0.8, led.glow(1.2));
+    g.build()
+}
+
+/// The fuse box: a grey steel box, its breaker's lever, a lamp red while tripped.
+pub fn fuse_box(tripped: bool) -> Mesh {
+    let mut g = Painter::default();
+    g.rounded(Vec2::ZERO, vec2(9.0, 11.0), 2.0, hex(0x1e2024));
+    g.rounded(Vec2::ZERO, vec2(8.0, 10.0), 1.6, hex(0x5a6068));
+    for k in 0..3 {
+        g.rect(
+            vec2(-3.0 + 3.0 * k as f32, -3.0),
+            vec2(1.0, 3.0),
+            0.0,
+            hex(0x2a2c30),
+        );
+    }
+    let y = if tripped { 2.0 } else { 6.0 };
+    g.rect(vec2(4.5, y), vec2(1.4, 3.0), 0.0, hex(0xc02818));
+    let lamp = if tripped {
+        hex(0xff3020).glow(2.0)
+    } else {
+        hex(0x6aff8a).glow(1.2)
+    };
+    g.circle(vec2(-4.5, 6.5), 1.4, lamp);
+    g.build()
+}
+
+/// A door's lock, over its leaf's middle: a red plate with a hasp, glowing
+/// dimly so a locked door is seen in the dark.
+pub fn lock() -> Mesh {
+    let mut g = Painter::default();
+    let red = hex(0xff3a2a);
+    g.rect(Vec2::ZERO, vec2(7.0, 5.5), 0.0, red.glow(0.9));
+    g.rect(Vec2::ZERO, vec2(5.5, 4.0), 0.0, hex(0x5a0e08));
+    g.circle(vec2(0.0, 0.8), 1.4, red.glow(1.6));
+    g.rect(vec2(0.0, -1.0), vec2(0.6, 1.6), 0.0, red.glow(1.6));
+    for side in [-1.0, 1.0] {
+        g.rect(vec2(0.0, 8.0 * side), vec2(9.0, 1.0), 0.0, red.glow(0.7));
+    }
+    g.build()
+}
 
 /// A door leaf from its hinge at the origin along +x.
 pub fn door_leaf(kind: DoorKind) -> Mesh {
@@ -794,14 +848,28 @@ pub fn robber(fades: bool, look: &Look) -> RobberParts {
             g.ellipse(Vec2::ZERO, vec2(6.5, 5.5), 0.0, hex(0x26304a));
             g.ellipse(vec2(1.0, 0.5), vec2(4.5, 3.8), 0.0, hex(0x46587e));
         }),
-        bag: build(&|g| {
-            g.circle(Vec2::ZERO, 12.5, BURLAP.shade(-0.4));
-            g.circle(Vec2::ZERO, 11.0, BURLAP);
-            g.circle(vec2(-2.5, 2.5), 5.0, BURLAP.shade(0.15));
-            g.line(vec2(-4.0, -4.0), vec2(4.0, 4.0), 2.2, hex(0x2a5a2a));
-            g.line(vec2(-1.0, -6.0), vec2(-1.0, 6.0), 1.2, hex(0x2a5a2a));
-            g.circle(vec2(9.0, 0.0), 3.0, BURLAP.shade(-0.3));
-            g.rect(vec2(6.0, 6.0), vec2(4.0, 2.2), 0.4, hex(0x7ab06a));
+        pack: build(&|g| {
+            let canvas = hex(0x3e4a34);
+            for side in [-1.0, 1.0] {
+                g.line(
+                    vec2(4.0, 7.5 * side),
+                    vec2(19.0, 9.0 * side),
+                    3.2,
+                    hex(0x1e2218),
+                );
+                g.rounded(
+                    vec2(-1.0, 11.5 * side),
+                    vec2(4.0, 2.6),
+                    1.2,
+                    canvas.shade(-0.15),
+                );
+            }
+            g.rounded(Vec2::ZERO, vec2(8.0, 11.0), 3.0, canvas.shade(-0.35));
+            g.rounded(vec2(0.5, 0.0), vec2(6.8, 9.8), 2.5, canvas);
+            g.rounded(vec2(2.5, 0.0), vec2(4.0, 8.6), 2.0, canvas.shade(0.12));
+            g.capsule(vec2(-6.5, -10.0), vec2(-6.5, 10.0), 5.0, hex(0x2e3a52));
+            g.line(vec2(-6.5, -4.0), vec2(-6.5, 4.0), 5.4, hex(0x1e2218));
+            g.rect(vec2(4.5, 0.0), vec2(0.8, 2.4), 0.0, pal::BRASS);
         }),
         torso: build(&|g| torso(g, look)),
         arm: build(&|g| sleeve(g, look)),
@@ -814,19 +882,13 @@ pub fn robber(fades: bool, look: &Look) -> RobberParts {
             g.line(vec2(26.0, 0.0), vec2(30.0, 4.0), 3.0, hex(0x9a2a1e));
             g.line(vec2(-3.0, 0.0), Vec2::ZERO, 3.0, hex(0x6a6e74));
         }),
-        torch: build(&|g| {
-            g.capsule(vec2(-2.0, 0.0), vec2(9.0, 0.0), 4.2, hex(0x2a2c30));
-            g.rect(vec2(10.5, 0.0), vec2(2.0, 3.4), 0.0, hex(0x4a4e54));
-            g.rect(vec2(12.6, 0.0), vec2(0.6, 2.8), 0.0, hex(0x8a9096));
+        lamp: build(&|g| {
+            g.rect(vec2(-1.0, 0.0), vec2(3.0, 3.6), 0.0, hex(0x1e2218));
+            g.capsule(vec2(-2.0, 0.0), vec2(3.0, 0.0), 4.0, hex(0x2a2c30));
+            g.rect(vec2(4.2, 0.0), vec2(1.4, 2.8), 0.0, hex(0x4a4e54));
+            g.rect(vec2(5.8, 0.0), vec2(0.5, 2.3), 0.0, hex(0x8a9096));
         }),
-        lens: build(&|g| {
-            g.rect(
-                vec2(12.6, 0.0),
-                vec2(0.9, 2.8),
-                0.0,
-                hex(0xfff4d8).glow(3.0),
-            )
-        }),
+        lens: build(&|g| g.rect(vec2(5.8, 0.0), vec2(0.8, 2.3), 0.0, hex(0xfff4d8).glow(3.0))),
         head: build(&|g| head(g, look)),
         streak: build(&|g| g.line(vec2(-16.0, 0.0), Vec2::ZERO, 2.0, hex(0xffffff).alpha(0.22))),
     }
@@ -857,23 +919,6 @@ pub fn item(g: &mut Painter, kind: Kind, half: Vec2) {
                 1.2,
                 red.shade(0.3),
             );
-        }
-        Kind::Flashlight => {
-            g.capsule(
-                vec2(-hx + 8.0, 0.0),
-                vec2(hx - 16.0, 0.0),
-                12.0,
-                hex(0x2a2c30),
-            );
-            g.line(
-                vec2(-hx + 10.0, 3.0),
-                vec2(hx - 20.0, 3.0),
-                1.5,
-                hex(0x4a4e56),
-            );
-            g.rect(vec2(hx - 11.0, 0.0), vec2(6.0, 9.5), 0.0, hex(0x4a4e54));
-            g.rect(vec2(hx - 4.0, 0.0), vec2(1.6, 8.0), 0.0, hex(0xd8e2ea));
-            g.rect(vec2(-4.0, 5.5), vec2(3.0, 1.6), 0.0, hex(0x8a9096));
         }
         // From the side, muzzle along `+x`: slide, frame, guard, grip.
         Kind::Pistol => {
@@ -947,6 +992,58 @@ pub fn item(g: &mut Painter, kind: Kind, half: Vec2) {
             }
             g.rect(Vec2::ZERO, vec2(hx - 18.0, hy - 16.0), 0.0, hex(0x07080a));
             g.circle(Vec2::ZERO, 2.0, hex(0xffb030));
+        }
+        Kind::Lantern => {
+            g.rounded(
+                vec2(-4.0, 0.0),
+                vec2(hx - 12.0, hy - 12.0),
+                5.0,
+                hex(0x2b2f35),
+            );
+            g.rect(
+                vec2(-4.0, 0.0),
+                vec2(hx - 18.0, hy - 18.0),
+                0.0,
+                hex(0x15171b),
+            );
+            g.rect(
+                vec2(hx - 10.0, 0.0),
+                vec2(4.0, hy - 10.0),
+                0.0,
+                hex(0x8a6cff).glow(1.2),
+            );
+            g.line(
+                vec2(-hx + 8.0, -hy + 12.0),
+                vec2(-hx + 8.0, hy - 12.0),
+                3.0,
+                pal::STEEL,
+            );
+        }
+        Kind::Coffer => {
+            let wood = hex(0x5a3a22);
+            g.rounded(Vec2::ZERO, vec2(hx - 6.0, hy - 8.0), 3.0, wood);
+            g.rect(vec2(0.0, 3.0), vec2(hx - 9.0, 1.2), 0.0, wood.shade(0.15));
+            for x in [-hx + 18.0, 0.0, hx - 18.0] {
+                g.rect(vec2(x, 0.0), vec2(2.5, hy - 8.0), 0.0, pal::STEEL_DARK);
+            }
+            g.rect(vec2(0.0, -hy + 14.0), vec2(4.0, 4.0), 0.0, pal::BRASS);
+        }
+        Kind::Trigger => {
+            g.line(
+                vec2(hx - 12.0, 4.0),
+                vec2(hx - 4.0, 10.0),
+                1.6,
+                hex(0x8a9096),
+            );
+            g.rounded(
+                vec2(-2.0, 0.0),
+                vec2(hx - 8.0, hy - 10.0),
+                3.0,
+                hex(0x2b2f35),
+            );
+            g.rect(vec2(-hx + 8.0, 0.0), vec2(2.0, hy - 10.0), 0.0, pal::GOLD);
+            g.circle(vec2(0.0, 0.0), 4.0, hex(0xc02818));
+            g.circle(vec2(-1.0, 1.0), 1.6, hex(0xff6a50));
         }
         Kind::Lockpicks => {
             for k in 0..3 {
@@ -1033,6 +1130,28 @@ pub fn ring(r: f32) -> Mesh {
     for i in 0..n {
         let a = |i: usize| Vec2::from_angle(i as f32 / n as f32 * TAU) * r;
         g.line(a(i), a(i + 1), 2.0, paint);
+    }
+    g.build()
+}
+
+/// The trap's net out to radius `r`, glowing blue, `a` opaque: rings and
+/// spokes with knots at the rim.
+pub fn net(r: f32, a: f32) -> Mesh {
+    let mut g = Painter::default();
+    let mut paint = hex(0x4aa8ff).glow(1.8);
+    paint.rgba[3] = a;
+    let (spokes, rings) = (12, 3);
+    let at = |i: usize, k: f32| Vec2::from_angle(i as f32 / spokes as f32 * TAU) * r * k;
+    for i in 0..spokes {
+        g.line(Vec2::ZERO, at(i, 1.0), 1.6, paint);
+        for k in 1..=rings {
+            let k = k as f32 / rings as f32;
+            // Each ring sags in between the spokes.
+            let mid = (at(i, k) + at(i + 1, k)) * 0.5 * 0.9;
+            g.line(at(i, k), mid, 1.4, paint);
+            g.line(mid, at(i + 1, k), 1.4, paint);
+        }
+        g.circle(at(i, 1.0), 2.2, paint);
     }
     g.build()
 }
@@ -1262,6 +1381,95 @@ pub fn footprint(left: bool, strength: f32) -> Mesh {
     for (i, r) in [1.5, 1.1, 1.0, 0.9, 0.8].into_iter().enumerate() {
         let y = (2.6 - 1.4 * i as f32) * side;
         g.circle(vec2(8.6 - 0.5 * i as f32 * i as f32 * 0.3, y), r, ink);
+    }
+    g.build()
+}
+
+/// An item lying on the ground, at the world's scale (the inventory's cell is 46).
+pub fn loot(kind: Kind) -> Mesh {
+    let mut g = Painter::default();
+    let half = kind.size().as_vec2() * 46.0 * 0.5;
+    let k = 0.42;
+    g.frame = Frame {
+        origin: Vec2::ZERO,
+        x: Vec2::X * k,
+        y: Vec2::Y * k,
+    };
+    g.rounded(Vec2::ZERO, half, 8.0, hex(0x1c1e22).alpha(0.8));
+    item(&mut g, kind, half);
+    g.build()
+}
+
+/// A UV lantern's beam, one long from its lens along `x`, `half` its half
+/// angle: violet, fading out along it.
+pub fn beam(half: f32) -> Mesh {
+    let mut g = Painter::default();
+    let n = 10;
+    let wide = half.tan();
+    for k in 0..n {
+        let (a, b) = (k as f32 / n as f32, (k + 1) as f32 / n as f32);
+        let mut violet = hex(0x9a6cff).glow(1.4);
+        violet.rgba[3] = 0.3 * (1.0 - a).powf(1.5);
+        let pts = [
+            vec2(a, -a * wide),
+            vec2(b, -b * wide),
+            vec2(b, b * wide),
+            vec2(a, a * wide),
+        ];
+        g.poly(&pts, violet);
+    }
+    g.build()
+}
+
+/// Frost on the floor, `strength` faded: pale rime spreading in crystals,
+/// glowing a little so it is seen in the dark.
+pub fn frost(strength: f32) -> Mesh {
+    let mut g = Painter::default();
+    let mut rime = hex(0xcfeeff).glow(0.45);
+    rime.rgba[3] = 0.5 * strength;
+    let mut spike = hex(0xe8f8ff).glow(0.6);
+    spike.rgba[3] = 0.7 * strength;
+    g.circle(Vec2::ZERO, 0.7 * TILE, rime);
+    for i in 0..14 {
+        let a = i as f32 / 14.0 * TAU + noise1(i as f32) * 0.3;
+        let len = (0.8 + 0.5 * noise1(i as f32 + 7.0)) * TILE;
+        let dir = Vec2::from_angle(a);
+        g.line(Vec2::ZERO, dir * len, 1.4, spike);
+        g.line(
+            dir * len * 0.55,
+            (dir + dir.perp() * 0.35) * len * 0.75,
+            1.0,
+            spike,
+        );
+    }
+    g.build()
+}
+
+/// How many looks loose things have.
+pub const JUNK_LOOKS: usize = 4;
+
+/// A loose thing: a mug, a stapler, a file, a ball of paper.
+pub fn junk(look: usize) -> Mesh {
+    let mut g = Painter::default();
+    match look % JUNK_LOOKS {
+        0 => {
+            g.circle(Vec2::ZERO, 5.0, hex(0xe8e2d4));
+            g.circle(Vec2::ZERO, 3.6, hex(0x4a2c1a));
+            g.rect(vec2(6.0, 0.0), vec2(1.8, 1.4), 0.0, hex(0xe8e2d4));
+        }
+        1 => {
+            g.rounded(Vec2::ZERO, vec2(8.0, 2.8), 1.4, hex(0x26282c));
+            g.rect(vec2(-5.0, 0.0), vec2(2.0, 2.0), 0.0, hex(0x8a9096));
+        }
+        2 => {
+            g.rect(Vec2::ZERO, vec2(8.0, 10.0), 0.0, hex(0xc8a868));
+            g.rect(vec2(0.0, 9.0), vec2(3.0, 1.2), 0.0, hex(0xb09050));
+            g.rect(vec2(1.0, -1.0), vec2(6.0, 8.0), 0.05, hex(0xf2efe6));
+        }
+        _ => {
+            g.circle(Vec2::ZERO, 4.5, hex(0xe6e3da));
+            g.line(vec2(-3.0, -1.0), vec2(2.5, 2.0), 0.8, hex(0xb8b4aa));
+        }
     }
     g.build()
 }

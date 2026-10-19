@@ -133,9 +133,9 @@ impl PropKind {
         )
     }
 
-    /// Thick enough to walk into and hide in.
+    /// Thick enough to walk into and hide in: a thicket indoors, a bush outside.
     pub fn is_hideout(self) -> bool {
-        self == PropKind::Thicket
+        matches!(self, PropKind::Thicket | PropKind::Bush)
     }
 }
 
@@ -263,7 +263,7 @@ fn spec(kind: PropKind) -> Spec {
         StreetLamp => s(false, 21.0, 10.0, true, false),
         Hydrant => s(false, 17.0, 18.0, true, false),
         Bin => s(false, 14.0, 24.0, true, false),
-        Bush => s(false, 4.0, 40.0, true, false),
+        Bush => s(false, 4.0, 40.0, false, false),
     }
 }
 
@@ -301,13 +301,29 @@ impl Map {
         self.tiles[self.idx(x, y)]
     }
 
+    /// Whether a lamp hangs indoors (not a street lamp).
+    pub fn lamp_indoors(&self, l: &Light) -> bool {
+        let (x, y) = tile_of(l.pos);
+        self.inside(x, y) && self.at(x, y).indoor
+    }
+
+    /// The room a lamp hangs in, if any.
+    pub fn lamp_room(&self, l: &Light) -> Option<usize> {
+        let (x, y) = tile_of(l.pos);
+        (self.inside(x, y) && self.at(x, y).room != NO_ROOM).then(|| self.at(x, y).room as usize)
+    }
+
     /// Per tile: outdoors, in a room with a lamp, or a door or wall beside one.
     pub fn lit(&self) -> Vec<bool> {
+        self.lit_with(&vec![true; self.lights.len()])
+    }
+
+    /// As `lit`, with only the lamps `on` shining.
+    pub fn lit_with(&self, on: &[bool]) -> Vec<bool> {
         let mut rooms = vec![false; self.rooms.len()];
-        for l in &self.lights {
-            let (x, y) = tile_of(l.pos);
-            if self.inside(x, y) && self.at(x, y).room != NO_ROOM {
-                rooms[self.at(x, y).room as usize] = true;
+        for (l, _) in self.lights.iter().zip(on).filter(|l| *l.1) {
+            if let Some(r) = self.lamp_room(l) {
+                rooms[r] = true;
             }
         }
         let room_lit = |x: i32, y: i32| {
@@ -1752,5 +1768,8 @@ fn print_map() {
     for (i, r) in m.rooms.iter().enumerate() {
         let letter = (b'a' + (i % 26) as u8) as char;
         println!("{letter} {:?} {:?}", r.kind, (r.x0, r.y0, r.x1, r.y1));
+    }
+    for p in m.props.iter().filter(|p| p.kind == PropKind::Bush) {
+        println!("bush {:?}", tile_of(p.block.centre()));
     }
 }

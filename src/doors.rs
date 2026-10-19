@@ -2,15 +2,19 @@
 //! (the robber puts his arm out, and back as it shuts behind him), the glass
 //! entrance by its sensor. How shut each is goes to the ray tracer, so a shut door stops
 //! sight and lamplight. The leaf is drawn as the robber last saw it: in the
-//! fog, nobody is seen opening doors.
+//! fog, nobody is seen opening doors. While the wraith haunts, the doors to
+//! the outside slam shut and are locked (`Leaf::locked`, a red lock on
+//! them): solid for the robbers (`Barred`) till it is over.
 
 use crate::map::{Door, DoorKind, Map, tile_centre};
-use crate::movement::{BODY_MARGIN, TILE};
+use crate::movement::{Aabb, BODY_MARGIN, Solids, TILE};
 use crate::paint;
 use crate::player::{Controls, Dead, Level, LocalPlayer, Player, Reach};
 use crate::render::{WorldMaterials, WorldPart, things_material};
 use crate::sight::Sight;
+use crate::smash::Bank;
 use crate::sound::{Clip, Noise};
+use crate::wraith::Wraith;
 use bevy::prelude::*;
 use bevy_replicon::prelude::{ClientState, Replicated};
 use serde::{Deserialize, Serialize};
@@ -61,7 +65,20 @@ pub struct Leaf {
     /// Seconds the wraith holds it open, then (below 0) slams it.
     #[serde(skip)]
     haunted: f32,
+    /// Between inside and outside (the server's), and locked by a haunt.
+    #[serde(skip)]
+    outer: bool,
+    pub locked: bool,
 }
+
+/// What the robbers walk against: the bank's solids and the locked doorways,
+/// while any door is locked.
+#[derive(Resource, Default)]
+pub struct Barred(pub Option<Solids>);
+
+/// The lock drawn on a locked door.
+#[derive(Component)]
+struct Lock;
 
 impl Leaf {
     pub fn centre(&self) -> Vec2 {
@@ -87,13 +104,15 @@ impl Plugin for DoorsPlugin {
                 swing
                     .run_if(resource_exists::<Level>.and_then(in_state(ClientState::Disconnected))),
                 to_shut.run_if(resource_exists::<Shut>),
+                bar.run_if(resource_exists::<Bank>),
             )
                 .chain(),
-        );
+        )
+        .init_resource::<Barred>();
         if crate::drawn(app) {
             app.add_systems(
                 Update,
-                (upload, show).after(to_shut).distributive_run_if(
+                (upload, show, locks).after(to_shut).distributive_run_if(
                     resource_exists::<Shut>.and_then(resource_exists::<Sight>),
                 ),
             );
@@ -103,6 +122,11 @@ impl Plugin for DoorsPlugin {
 
 pub fn spawn_doors(commands: &mut Commands, map: &Map) {
     for door in map.doors() {
+        let side = |s: f32| {
+            let p = tile_centre(door.x, door.y) + door.across * s * TILE;
+            let (x, y) = crate::map::tile_of(p);
+            map.inside(x, y) && map.at(x, y).indoor
+        };
         commands.spawn((
             WorldPart,
             Replicated,
@@ -114,6 +138,8 @@ pub fn spawn_doors(commands: &mut Commands, map: &Map) {
                 side: 1.0,
                 robber: None,
                 haunted: 0.0,
+                outer: side(1.0) != side(-1.0),
+                locked: false,
             },
         ));
     }
@@ -127,12 +153,21 @@ pub fn dress(
 ) {
     for (e, leaf) in &leaves {
         let d = leaf.door;
-        commands.entity(e).insert((
-            Mesh2d(meshes.add(paint::door_leaf(d.kind))),
-            MeshMaterial2d(things_material(&world_materials)),
-            Transform::from_translation(d.hinge.extend(5.0))
-                .with_rotation(Quat::from_rotation_z(d.along.to_angle())),
-        ));
+        commands
+            .entity(e)
+            .insert((
+                Mesh2d(meshes.add(paint::door_leaf(d.kind))),
+                MeshMaterial2d(things_material(&world_materials)),
+                Transform::from_translation(d.hinge.extend(5.0))
+                    .with_rotation(Quat::from_rotation_z(d.along.to_angle())),
+            ))
+            .with_child((
+                Lock,
+                Mesh2d(meshes.add(paint::lock())),
+                MeshMaterial2d(things_material(&world_materials)),
+                Transform::from_xyz((TILE - 3.0) * 0.5, 0.0, 0.2),
+                Visibility::Hidden,
+            ));
     }
 }
 
@@ -149,8 +184,10 @@ fn swing(
     me: Option<Single<&Player, With<LocalPlayer>>>,
     mut robbers: Query<(Entity, &Player, &mut Reach), Without<Dead>>,
     mut leaves: Query<&mut Leaf>,
+    wraiths: Query<&Wraith>,
     mut noises: MessageWriter<Noise>,
 ) {
+    let haunting = wraiths.iter().any(|w| w.shown && !w.caught);
     let walkers: Vec<_> = robbers
         .iter()
         .map(|(e, p, _)| (Some(e), p.body.pos, p.body.speed, p.body.is_crouching()))
@@ -160,17 +197,24 @@ fn swing(
         let d = leaf.door;
         let centre = tile_centre(d.x, d.y);
         let by_hand = d.kind != DoorKind::Glass;
-        let opener = walkers.iter().find_map(|&(robber, pos, speed, _)| {
-            let off = pos - centre;
-            let gap = off.dot(d.across).abs();
-            let near = if by_hand {
-                gap < REACH && off.dot(d.along).abs() < TILE * 0.5 + BODY_MARGIN
-            } else {
-                off.length() < SENSOR
-            };
-            near.then_some((robber, off, gap, speed))
-        });
-        let ghost = leaf.haunted > 0.0;
+        let locked = leaf.outer && haunting;
+        if leaf.locked != locked {
+            leaf.locked = locked;
+        }
+        let opener = walkers
+            .iter()
+            .filter(|_| !locked)
+            .find_map(|&(robber, pos, speed, _)| {
+                let off = pos - centre;
+                let gap = off.dot(d.across).abs();
+                let near = if by_hand {
+                    gap < REACH && off.dot(d.along).abs() < TILE * 0.5 + BODY_MARGIN
+                } else {
+                    off.length() < SENSOR
+                };
+                near.then_some((robber, off, gap, speed))
+            });
+        let ghost = leaf.haunted > 0.0 && !locked;
         let slam = leaf.haunted < 0.0;
         if leaf.haunted != 0.0 {
             let h = leaf.haunted;
@@ -219,13 +263,54 @@ fn swing(
         let (goal, rate) = match opener {
             Some((_, _, gap, speed)) => (1.0, OPENING.min((gap / speed.max(1.0)).max(0.05))),
             None if ghost => (1.0, OPENING),
-            None if slam => (0.0, SLAM),
+            None if slam || locked => (0.0, SLAM),
             None => (0.0, CLOSING),
         };
         // Untouched unless it moves: a changed leaf is sent to every player.
         let open = was + (goal - was).clamp(-dt / rate, dt / rate);
         if open != was {
             leaf.open = open;
+        }
+    }
+}
+
+/// The robbers' solids again whenever the locked doors change.
+fn bar(
+    bank: Res<Bank>,
+    leaves: Query<&Leaf>,
+    mut barred: ResMut<Barred>,
+    mut was: Local<Vec<usize>>,
+) {
+    let locked: Vec<usize> = leaves.iter().filter(|l| l.locked).map(|l| l.tile).collect();
+    if locked == *was && !bank.is_changed() {
+        return;
+    }
+    let map = &bank.0;
+    barred.0 = (!locked.is_empty()).then(|| {
+        let mut rects = map.solids();
+        rects.extend(leaves.iter().filter(|l| l.locked).map(|l| {
+            let c = l.centre();
+            Aabb::new(c - Vec2::splat(TILE * 0.5), c + Vec2::splat(TILE * 0.5))
+        }));
+        Solids::new(map.bounds(), rects)
+    });
+    *was = locked;
+}
+
+/// A locked door shows its lock.
+fn locks(
+    leaves: Query<(&Leaf, &Children), Changed<Leaf>>,
+    mut marks: Query<&mut Visibility, With<Lock>>,
+) {
+    for (leaf, children) in &leaves {
+        for &c in children {
+            if let Ok(mut vis) = marks.get_mut(c) {
+                vis.set_if_neq(if leaf.locked {
+                    Visibility::Inherited
+                } else {
+                    Visibility::Hidden
+                });
+            }
         }
     }
 }

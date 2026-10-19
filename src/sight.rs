@@ -59,6 +59,11 @@ impl Sight {
         (x >= 0 && y >= 0 && x < self.w && y < self.h).then(|| (y * self.w + x) as usize)
     }
 
+    /// Which tiles are lit now, the lamps switched as they are.
+    pub fn set_lit(&mut self, lit: Vec<bool>) {
+        self.lit = lit;
+    }
+
     pub fn lit_at(&self, p: Vec2) -> bool {
         self.index(p).is_none_or(|i| self.lit[i])
     }

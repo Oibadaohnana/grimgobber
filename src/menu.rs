@@ -8,11 +8,13 @@
 //! keys as well as the mouse (`Nav`): up and down move, left and right change
 //! a colour or an outfit, Enter (or Space, in the Esc menu) chooses.
 
-use crate::crew::{COLOURS, Crewmate, LONGEST_NAME, Leave, Look, Outfit, Ready, Settings};
+use crate::crew::{
+    COLOURS, Crewmate, LONGEST_NAME, Leave, Look, Outfit, Ready, Settings, SoundLevel,
+};
 use crate::door::{Asking, CODE_LEN, FIRST};
 use crate::doors::Shut;
 use crate::inventory::Inventory;
-use crate::net::{Knocking, Mode, Owner, Seed, TitleLine, my_id};
+use crate::net::{Knocking, Mode, Owner, PROTOCOL, Seed, TitleLine, VERSION, my_id};
 use crate::paint::{self, Hex, hex};
 use crate::player::{Controls, Dead, LocalPlayer, Player, Shown};
 use crate::render::MainCamera;
@@ -42,6 +44,8 @@ enum Act {
     Outfit(Outfit),
     Ready,
     Resume,
+    /// The sound level: left and right turn it, a click a step up.
+    Volume,
     Lobby,
     Quit,
     Join,
@@ -114,7 +118,11 @@ pub struct Nav {
 const ROWS: [&str; 3] = ["NAME", "COLOUR", "OUTFIT"];
 const READY_ROW: usize = ROWS.len();
 const LEAVE_ROW: usize = READY_ROW + 1;
-const ESC: [Act; 3] = [Act::Resume, Act::Lobby, Act::Quit];
+const ESC: [Act; 4] = [Act::Resume, Act::Volume, Act::Lobby, Act::Quit];
+
+fn volume_words(level: f32) -> String {
+    format!("Volume  < {:.0}% >", level * 100.0)
+}
 const TITLE: [Act; 4] = [Act::Join, Act::Host, Act::Alone, Act::Quit];
 
 /// A lobby row's heading, lit while the keys are on it.
@@ -135,6 +143,7 @@ impl Plugin for MenuPlugin {
                 (
                     (auto, typing, hover, acts).chain(),
                     show,
+                    volume_line,
                     crew_list,
                     lines,
                     buttons,
@@ -232,7 +241,8 @@ fn lobby(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
                 },
                 children![
                     label("BANK BOBBERY", 30.0, TEXT),
-                    label("find its name, speak it, trap it", 13.0, DIM),
+                    label("tell what it is, catch it", 13.0, DIM),
+                    label(&format!("{VERSION} (protocol {PROTOCOL})"), 11.0, DIM),
                     (CodeLine, label("", 15.0, TEXT)),
                 ],
             ),
@@ -359,7 +369,8 @@ fn title(mut commands: Commands) {
         Visibility::Hidden,
         children![
             label("BANK BOBBERY", 30.0, TEXT),
-            label("find its name, speak it, trap it", 13.0, DIM),
+            label("tell what it is, catch it", 13.0, DIM),
+            label(&format!("{VERSION} (protocol {PROTOCOL})"), 11.0, DIM),
             Node {
                 height: Val::Px(18.0),
                 ..default()
@@ -412,6 +423,7 @@ fn esc_menu(mut commands: Commands) {
         children![
             label("MENU", 13.0, DIM),
             button(Act::Resume, "Resume"),
+            button(Act::Volume, ""),
             button(Act::Lobby, "Back to the lobby"),
             button(Act::Quit, "Quit"),
         ],
@@ -434,6 +446,7 @@ fn portrait(
 
 /// In the bank, Esc opens and shuts the menu (not over the inventory or the
 /// talk box); while it is open nothing else hears a key or a click.
+#[allow(clippy::too_many_arguments)]
 pub fn escape(
     mut keys: ResMut<ButtonInput<KeyCode>>,
     mut mouse: ResMut<ButtonInput<MouseButton>>,
@@ -442,6 +455,7 @@ pub fn escape(
     script: Res<crate::dev::Script>,
     mut menu: ResMut<EscMenu>,
     mut nav: ResMut<Nav>,
+    mut level: ResMut<SoundLevel>,
 ) {
     let Some(inv) = me else {
         menu.0 = false;
@@ -466,8 +480,16 @@ pub fn escape(
     if keys.any_just_pressed([KeyCode::Enter, KeyCode::NumpadEnter, KeyCode::Space]) {
         nav.chosen = Some(ESC[nav.item]);
     }
+    if ESC[nav.item] == Act::Volume {
+        let left = keys.any_just_pressed([KeyCode::ArrowLeft, KeyCode::KeyA]);
+        let right = keys.any_just_pressed([KeyCode::ArrowRight, KeyCode::KeyD]);
+        if left || right {
+            let step = if right { 0.1 } else { -0.1 };
+            level.0 = ((level.0 + step) * 10.0).round().clamp(0.0, 10.0) / 10.0;
+        }
+    }
     keys.reset_all();
-    mouse.reset_all();
+    mouse.clear_just_pressed(MouseButton::Left);
 }
 
 /// What the title's actions need beside the rest.
@@ -499,6 +521,7 @@ fn acts(
     script: Res<crate::dev::Script>,
     crew: Query<&Crewmate>,
     mut settings: ResMut<Settings>,
+    mut level: ResMut<SoundLevel>,
     mut menu: ResMut<EscMenu>,
     mut nav: ResMut<Nav>,
     mut ready: MessageWriter<Ready>,
@@ -528,6 +551,13 @@ fn acts(
                 ready.write(Ready(!now));
             }
             Act::Resume => menu.0 = false,
+            Act::Volume => {
+                level.0 = if level.0 >= 0.95 {
+                    0.0
+                } else {
+                    ((level.0 + 0.1) * 10.0).round() / 10.0
+                };
+            }
             Act::Lobby => {
                 leave.write(Leave);
                 menu.0 = false;
@@ -675,7 +705,8 @@ fn show(
         }
     };
     title.set_if_neq(vis(*mode == Mode::Title));
-    lobby.set_if_neq(vis(*mode != Mode::Title && me.is_none()));
+    let lobby_mode = matches!(*mode, Mode::Alone | Mode::Online(_));
+    lobby.set_if_neq(vis(lobby_mode && me.is_none()));
     esc.set_if_neq(vis(me.is_some() && menu.0));
 }
 
@@ -812,9 +843,29 @@ fn hover(acts: Query<(&Interaction, &Act), Changed<Interaction>>, mut nav: ResMu
                 nav.title = 1 + TITLE.iter().position(|t| *t == *act).unwrap_or(0);
             }
             a => {
-                nav.item = ESC.iter().position(|e| *e == a).unwrap_or(nav.item);
-                nav.title = 1 + TITLE.iter().position(|t| *t == a).unwrap_or(nav.title - 1);
+                if let Some(i) = ESC.iter().position(|e| *e == a) {
+                    nav.item = i;
+                }
+                if let Some(i) = TITLE.iter().position(|t| *t == a) {
+                    nav.title = 1 + i;
+                }
             }
+        }
+    }
+}
+
+/// The volume button's words, with the level in them.
+fn volume_line(
+    level: Res<SoundLevel>,
+    buttons: Query<(&Act, &Children)>,
+    mut texts: Query<&mut Text>,
+) {
+    let words = volume_words(level.0);
+    for (_, children) in buttons.iter().filter(|b| *b.0 == Act::Volume) {
+        if let Some(mut t) = children.first().and_then(|&c| texts.get_mut(c).ok())
+            && t.0 != words
+        {
+            t.0 = words.clone();
         }
     }
 }

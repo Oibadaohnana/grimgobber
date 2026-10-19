@@ -1,28 +1,35 @@
+mod capture;
 mod crew;
 mod dev;
 mod door;
 mod doors;
+mod end;
 mod guns;
 mod hearing;
 mod inventory;
 mod inventory_ui;
+mod junk;
 mod map;
 mod menu;
 mod movement;
 mod net;
 mod paint;
 mod paths;
+mod phone;
 mod player;
+mod power;
 mod prompt;
 mod render;
 mod rng;
 mod sanity;
 mod sight;
+mod sim;
 mod smash;
 mod sound;
 mod talk;
 mod throw;
 mod trap;
+mod van;
 mod wraith;
 
 use bevy::app::ScheduleRunnerPlugin;
@@ -65,6 +72,10 @@ pub fn drawn(app: &App) -> bool {
 }
 
 fn main() {
+    if std::env::args().any(|a| a == "--version") {
+        println!("grimgobber {} (protocol {})", net::VERSION, net::PROTOCOL);
+        return;
+    }
     if let Some(port) = net::serve() {
         door::serve(port);
     }
@@ -87,7 +98,7 @@ fn main() {
         let smoke = dev::smoke_frames().is_some();
         app.add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                title: "Bank Bobbery".into(),
+                title: format!("Bank Bobbery {}", net::VERSION),
                 resolution: WindowResolution::new(w, h),
                 present_mode: if smoke {
                     PresentMode::AutoNoVsync
@@ -107,9 +118,12 @@ fn main() {
             talk::TalkPlugin,
             menu::MenuPlugin,
             smash::SmashPlugin,
-            throw::ThrowPlugin,
             prompt::PromptPlugin,
             guns::GunsPlugin,
+            sim::SimPlugin,
+            junk::JunkPlugin,
+            phone::PhonePlugin,
+            van::VanPlugin,
         ))
         .insert_resource(ClearColor(Color::srgb(0.01, 0.012, 0.02)))
         .init_resource::<WorldMaterials>()
@@ -125,6 +139,9 @@ fn main() {
                     wraith::dress,
                     wraith::dress_notes,
                     trap::dress,
+                    junk::dress,
+                    van::dress,
+                    power::dress,
                     hud,
                 )
                     .chain()
@@ -140,12 +157,17 @@ fn main() {
             wraith::WraithPlugin,
             sanity::SanityPlugin,
             trap::TrapPlugin,
+            capture::CapturePlugin,
+            end::EndPlugin,
+            power::PowerPlugin,
+            throw::ThrowPlugin,
             crew::CrewPlugin,
             dev::DevPlugin,
         ))
-        .insert_resource(NewMap(None))
+        .insert_resource(NewMap(net::sim().then_some(seed)))
         .insert_resource(match role {
             net::Role::Client(_) => net::Mode::Online(None),
+            _ if net::sim() => net::Mode::Sim,
             // A smoke run plays alone at once, unless it is to try the title.
             _ if dev::smoke_frames().is_some()
                 && ["BB_TITLE", "BB_JOIN", "BB_HOST"]
@@ -157,6 +179,9 @@ fn main() {
             _ => net::Mode::Title,
         })
         .insert_resource(crew::NextSeed(seed))
+        .add_systems(Startup, || {
+            info!("grimgobber {} (protocol {})", net::VERSION, net::PROTOCOL)
+        })
         .add_systems(Update, (served, clear, build_map).chain())
         .run();
 }
@@ -259,6 +284,7 @@ fn clear(
     commands.remove_resource::<doors::Shut>();
     commands.remove_resource::<smash::Bank>();
     commands.remove_resource::<paths::Walkable>();
+    commands.remove_resource::<power::Switches>();
 }
 
 /// A robber for each crewmate, in his look; who is in it comes from the
@@ -282,6 +308,7 @@ fn build_map(
     commands.insert_resource(Level::new(&map));
     if joined.is_none() {
         commands.spawn((WorldPart, Replicated, net::Seed(seed)));
+        commands.spawn((WorldPart, Replicated, power::Power::new(&map, seed)));
         doors::spawn_doors(&mut commands, &map);
         commands.insert_resource(paths::Walkable::new(&map));
         wraith::spawn_wraith(&mut commands, &map, seed);
@@ -314,6 +341,8 @@ fn build_map(
         map.w, map.h, current.rooms, current.props, current.lamps
     );
     commands.insert_resource(current);
+    // With the bank, never after it: a stale one's rooms index the new `Power`.
+    commands.insert_resource(power::Switches::new(&map));
     commands.insert_resource(smash::Bank(map));
 }
 
@@ -340,7 +369,6 @@ type Me<'a> = (
     &'a Controls,
     &'a guns::Gunplay,
     &'a inventory::Inventory,
-    &'a sanity::Sanity,
     Has<player::Dead>,
 );
 
@@ -356,7 +384,7 @@ fn hud(
     let (Some(current), Some(level), Ok(mut text)) = (current, level, text.single_mut()) else {
         return;
     };
-    let (player, controls, gun, inventory, sanity, dead) = *me;
+    let (player, controls, gun, inventory, dead) = *me;
     let fps = diagnostics
         .get(&FrameTimeDiagnosticsPlugin::FPS)
         .and_then(|d| d.smoothed())
@@ -378,18 +406,22 @@ fn hud(
         "standing"
     };
     let torch = if controls.torch { "on" } else { "off" };
+    let uv = if controls.uv { "   UV lantern on" } else { "" };
     let mind = if dead {
-        "DEAD: you walk on unseen".to_string()
+        "DEAD: you walk on unseen   "
     } else {
-        format!("sanity {:.0}%", sanity.0)
+        ""
     };
     // What the crew has of the wraith: the letters found, then its name.
     let hunt = wraiths.iter().next().map_or(String::new(), |w| {
-        let mut letters: Vec<String> = w.letters.iter().map(char::to_string).collect();
-        letters.resize(wraith::NAME_LEN, "_".into());
-        match (w.caught, w.named, w.letters.len() >= wraith::NAME_LEN) {
+        let letters: Vec<String> = w
+            .letters
+            .iter()
+            .map(|l| l.map_or("_".into(), String::from))
+            .collect();
+        match (w.caught, w.named, w.name().is_some()) {
             (true, ..) => "CAUGHT IT: the round is won (F5 for a new bank)".into(),
-            (_, true, _) => "its name is spoken: lure it over a trap".into(),
+            (_, true, _) => "its name is spoken: it comes for you (P: what is it?)".into(),
             (_, _, true) => format!("letters {}: T to speak its name", letters.join(" ")),
             _ => format!("letters {}", letters.join(" ")),
         }
@@ -413,11 +445,16 @@ fn hud(
         _ => String::new(),
     };
     text.0 = format!(
-        "BANK BOBBERY   bank #{}  ({} rooms, {} props, {} lamps)   {:.0} fps\n\
+        "BANK BOBBERY {}   bank #{}  ({} rooms, {} props, {} lamps)   {:.0} fps\n\
          WASD walk | mouse aim | Shift sprint | C crouch | Space/Alt roll | F flashlight | Tab inventory | 1-4 quick slots\n\
-         E pick up | T speak | R reload | wheel zoom | Esc menu | F11 full screen\n\
-         {mind}   {state}   roll {roll}   flashlight {torch}{pistol}\n\
+         E pick up | T speak | P phone | R reload | wheel zoom | Esc menu | F11 full screen\n\
+         {mind}{state}   roll {roll}   flashlight {torch}{uv}{pistol}\n\
          {hunt}",
-        current.seed, current.rooms, current.props, current.lamps, fps
+        net::VERSION,
+        current.seed,
+        current.rooms,
+        current.props,
+        current.lamps,
+        fps
     );
 }

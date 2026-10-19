@@ -5,9 +5,11 @@
 //! - `BB_SCREENSHOT=path.png`: save the frame 30 before the end
 //! - `BB_KEYS="10:+W,40:-W,45:Roll"`: hold (+) or let go (-) of W A S D Shift
 //!   Up Down Left Right at those frames, or press `Roll`, `Torch`, `Crouch`,
-//!   `Inventory`, `Slot1`–`Slot4` or `Smash`, `Throw`, `Fire` or `SetTrap` (a left click), `Use` (E), `Reload`, `NewBank` (F5), `Talk` (T), `Say`, `Ready` (in the lobby), `Menu` (Esc) or `Leave` (back to the lobby) once
+//!   `Inventory`, `Slot1`–`Slot4` or `Smash`, `Throw`, `Fire`, `SetTrap` or `Pull` (a left click), `Use` (E), `Reload`, `NewBank` (F5), `Talk` (T), `Say`, `Ready` (in the lobby), `Hunter` or `FreeCam` (H, V in the sim), `Phone` (P), `Sign1`–`Sign6` (on the phone), `+Lamp`/`-Lamp` (the left button held, for the UV lantern), `Menu` (Esc) or `Leave` (back to the lobby) once
 //!   or `Key:ArrowUp` (`ArrowDown`, `ArrowLeft`, `ArrowRight`, `Enter`, `Tab`,
-//!   `Escape`, `Space`, `W`, `A`, `S`, `D`): a real key press, as the keyboard sends it
+//!   `Escape`, `Space`, `W`, `A`, `S`, `D`): a real key press, as the keyboard sends it,
+//!   or `Click:x;y`: the pointer put there (logical pixels) and the left button clicked;
+//!   `Down:x;y`, `Move:x;y` and `Up` drag with it
 //! - `BB_AIM=degrees`: aim there instead of at the pointer (0 east, 90 north)
 //! - `BB_ZOOM=scale`: world units a pixel to start at (else zoomed out all the way)
 //! - `BB_WINDOW=1400x900`: the window's size
@@ -20,6 +22,7 @@
 //! - `BB_LOBBY=1`: a smoke run stays in the lobby (else it is ready at once)
 //! - `BB_SAY=word`: what the `Say` key in `BB_KEYS` speaks to the wraith
 //! - `BB_SANITY=n`: every robber starts at n% sanity
+//! - `BB_GHOST=Shade`: the wraith's kind (`Poltergeist`, `Shade`, `Banshee`)
 //! - `BB_UNPACED=1`: smoke frames as fast as they go, logging the average fps
 //! - `BB_PLAYERS=n`: n-1 more robbers by the spawn, flashlights on, walking in slow circles
 
@@ -28,6 +31,7 @@ use crate::movement::TILE;
 use crate::player::Controls;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
+use bevy::input::mouse::MouseButtonInput;
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use std::collections::HashSet;
@@ -133,7 +137,7 @@ impl Plugin for DevPlugin {
             .add_systems(PreUpdate, bots)
             .add_systems(Last, smoke);
         if crate::drawn(app) {
-            app.add_systems(First, typed.after(play_script));
+            app.add_systems(First, (typed, clicked).after(play_script));
         }
         if smoke_frames().is_some() {
             app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
@@ -203,6 +207,46 @@ fn typed(
         };
         send(code, key.clone(), ButtonState::Pressed);
         down.push((code, key));
+    }
+}
+
+/// `Click:x;y` in the script: the pointer there, and a left click, pressed
+/// for a frame as the mouse would; `Down:x;y` and `Up` press and let go,
+/// `Move:x;y` only moves the pointer.
+fn clicked(
+    script: Res<Script>,
+    mut window: Query<(Entity, &mut Window), With<bevy::window::PrimaryWindow>>,
+    mut buttons: MessageWriter<MouseButtonInput>,
+    mut down: Local<bool>,
+) {
+    let Ok((entity, mut window)) = window.single_mut() else {
+        return;
+    };
+    let mut send = |state| {
+        buttons.write(MouseButtonInput {
+            button: MouseButton::Left,
+            state,
+            window: entity,
+        });
+    };
+    if std::mem::take(&mut *down) || script.pressed("Up") {
+        send(ButtonState::Released);
+    }
+    for p in &script.pressed {
+        let Some((what, at)) = p.split_once(':') else {
+            continue;
+        };
+        let Some((Ok(x), Ok(y))) = at.split_once(';').map(|(x, y)| (x.parse(), y.parse())) else {
+            continue;
+        };
+        if !matches!(what, "Click" | "Down" | "Move") {
+            continue;
+        }
+        window.set_cursor_position(Some(vec2(x, y)));
+        if what != "Move" {
+            send(ButtonState::Pressed);
+        }
+        *down = what == "Click";
     }
 }
 

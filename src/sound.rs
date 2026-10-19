@@ -1,7 +1,10 @@
 //! The sounds of `../bankbobbery`, as its `audio.js` places them: quieter
 //! with distance, and quieter still (`WALL`) where the robber cannot see.
-//! Doors are one-shots; footsteps a loop on each walker, at the pace he goes.
+//! Doors are one-shots; footsteps a loop on each walker, at the pace he goes;
+//! under it all, while there is a bank, the air: outside bims' temperate
+//! air, inside a building's deep hum, faded into each other at the door.
 
+use crate::crew::SoundLevel;
 use crate::doors::Shut;
 use crate::movement::{MARCH_SPEED, TILE};
 use crate::player::{Controls, Dead, LocalPlayer, Player};
@@ -25,6 +28,10 @@ pub enum Clip {
     Reload,
     Unholster,
     Holster,
+    /// A loose thing landing.
+    Thud,
+    /// The banshee.
+    Wail,
 }
 
 /// A noise at a point in the building: its sample, if it has one, and how
@@ -51,6 +58,19 @@ const SHOT: &[u8] = include_bytes!("../sounds/pistol_shot.ogg");
 const RELOAD: &[u8] = include_bytes!("../sounds/reload.ogg");
 const UNHOLSTER: &[u8] = include_bytes!("../sounds/unholster.ogg");
 const HOLSTER: &[u8] = include_bytes!("../sounds/holster.ogg");
+const KNOCKOUT: &[u8] = include_bytes!("../sounds/knockout.ogg");
+// Loops at -30 LUFS: bims2_bevy's temperate air (`Sounds/game/temperate.ogg`),
+// and a hum synthesised by `sounds/inside.py`.
+const OUTSIDE: &[u8] = include_bytes!("../sounds/outside.ogg");
+const INSIDE: &[u8] = include_bytes!("../sounds/inside.ogg");
+/// The hum is played at half the outside air's level.
+const HUM: f32 = 0.5;
+/// Seconds to fade (95% of the way) from one to the other.
+const FADE: f32 = 1.5;
+
+/// The air's loops, by whether they are heard indoors.
+#[derive(Component)]
+struct Air(bool);
 
 #[derive(Resource)]
 struct Clips {
@@ -63,6 +83,7 @@ struct Clips {
     reload: Handle<AudioSource>,
     unholster: Handle<AudioSource>,
     holster: Handle<AudioSource>,
+    knockout: Handle<AudioSource>,
 }
 
 pub struct SoundPlugin;
@@ -76,8 +97,11 @@ impl Plugin for SoundPlugin {
         }
         app.add_systems(Startup, load).add_systems(
             Update,
-            (feet, noises, steps)
-                .run_if(resource_exists::<Shut>.and_then(resource_exists::<Sight>)),
+            (
+                air,
+                (feet, noises, steps)
+                    .run_if(resource_exists::<Shut>.and_then(resource_exists::<Sight>)),
+            ),
         );
     }
 }
@@ -98,7 +122,42 @@ fn load(mut assets: ResMut<Assets<AudioSource>>, mut commands: Commands) {
         reload: add(RELOAD),
         unholster: add(UNHOLSTER),
         holster: add(HOLSTER),
+        knockout: add(KNOCKOUT),
     });
+    for (indoor, bytes) in [(false, OUTSIDE), (true, INSIDE)] {
+        commands.spawn((
+            Air(indoor),
+            AudioPlayer::new(add(bytes)),
+            PlaybackSettings::LOOP.with_volume(Volume::SILENT),
+        ));
+    }
+}
+
+/// The air where the camera is (on him, or free in the sim), while there
+/// is a bank: not at the title or in the lobby.
+fn air(
+    time: Res<Time>,
+    level: Res<SoundLevel>,
+    bank: Option<Res<crate::smash::Bank>>,
+    camera: Single<&Transform, With<crate::render::MainCamera>>,
+    mut loops: Query<(&Air, &mut AudioSink)>,
+    mut inside: Local<f32>,
+) {
+    let indoor = bank.as_ref().is_some_and(|b| {
+        let (x, y) = crate::map::tile_of(camera.translation.truncate());
+        b.0.inside(x, y) && b.0.at(x, y).indoor
+    });
+    let goal = if indoor { 1.0 } else { 0.0 };
+    *inside += (goal - *inside) * crate::movement::approach(3.0 / FADE, time.delta_secs());
+    let on = if bank.is_some() {
+        MASTER * level.0
+    } else {
+        0.0
+    };
+    for (air, mut sink) in &mut loops {
+        let share = if air.0 { HUM * *inside } else { 1.0 - *inside };
+        sink.set_volume(Volume::Linear(on * share));
+    }
 }
 
 /// What the robber hears by: where he is, and what he can see.
@@ -107,6 +166,7 @@ struct Ear<'w, 's> {
     me: Single<'w, 's, (&'static Player, &'static Controls), With<LocalPlayer>>,
     sight: Res<'w, Sight>,
     shut: Res<'w, Shut>,
+    level: Res<'w, SoundLevel>,
 }
 
 impl Ear<'_, '_> {
@@ -143,6 +203,9 @@ fn noises(clips: Res<Clips>, ear: Ear, mut noises: MessageReader<Noise>, mut com
         };
         // Its sample, loudness, and the tiles it carries to the robber's ear.
         let (handle, gain, range) = match clip {
+            // The door's creak, slowed down to a moan.
+            Clip::Wail => (&clips.door_open, 1.0, 40.0),
+            Clip::Thud => (&clips.knockout, 0.7, 12.0),
             Clip::DoorOpen => (&clips.door_open, 0.7, 13.0),
             Clip::DoorClose => (&clips.door_close, 0.7, 13.0),
             Clip::Glass => (&clips.glass, 1.0, 24.0),
@@ -152,11 +215,13 @@ fn noises(clips: Res<Clips>, ear: Ear, mut noises: MessageReader<Noise>, mut com
             Clip::Unholster => (&clips.unholster, 0.9, 8.0),
             Clip::Holster => (&clips.holster, 0.9, 8.0),
         };
-        let level = MASTER * gain * ear.heard(at, range);
+        let level = MASTER * ear.level.0 * gain * ear.heard(at, range);
         if level > 0.002 {
             commands.spawn((
                 AudioPlayer::new(handle.clone()),
-                PlaybackSettings::DESPAWN.with_volume(Volume::Linear(level)),
+                PlaybackSettings::DESPAWN
+                    .with_volume(Volume::Linear(level))
+                    .with_speed(if clip == Clip::Wail { 0.35 } else { 1.0 }),
             ));
         }
     }
@@ -172,8 +237,8 @@ fn steps(ear: Ear, mut robbers: Query<(&Player, Has<LocalPlayer>, Has<Dead>, &mu
         let soft = if b.is_crouching() { 0.4 } else { 1.0 };
         let level = match (walking, me) {
             (false, _) => 0.0,
-            (true, true) => MASTER * 0.275 * soft,
-            (true, false) => MASTER * 0.275 * ear.heard(b.pos, 9.0),
+            (true, true) => MASTER * ear.level.0 * 0.275 * soft,
+            (true, false) => MASTER * ear.level.0 * 0.275 * ear.heard(b.pos, 9.0),
         };
         sink.set_volume(Volume::Linear(level));
         sink.set_speed(pace(b.speed).clamp(0.7, 1.4));
@@ -188,7 +253,8 @@ mod tests {
     #[test]
     fn every_clip_decodes() {
         for bytes in [
-            DOOR_OPEN, DOOR_CLOSE, WALK, GLASS, COIN, SHOT, RELOAD, UNHOLSTER, HOLSTER,
+            DOOR_OPEN, DOOR_CLOSE, WALK, GLASS, COIN, SHOT, RELOAD, UNHOLSTER, HOLSTER, KNOCKOUT,
+            OUTSIDE, INSIDE,
         ] {
             let clip = AudioSource {
                 bytes: bytes.into(),

@@ -69,6 +69,7 @@ fn bake(
     mut cameras: Query<(&mut Camera, Ref<Bake>)>,
     shut: Option<Res<Shut>>,
     bank: Option<Res<Bank>>,
+    power: Query<Ref<crate::power::Power>>,
     compiling: Res<Compiling>,
     // Frames each map still wants, and the one drawn last.
     mut left: Local<[u8; 2]>,
@@ -76,7 +77,10 @@ fn bake(
 ) {
     if compiling.0.load(Ordering::Relaxed) || cameras.iter().any(|(_, b)| b.is_added()) {
         *left = [3; 2];
-    } else if shut.is_some_and(|s| s.is_changed()) || bank.is_some_and(|b| b.is_changed()) {
+    } else if shut.is_some_and(|s| s.is_changed())
+        || bank.is_some_and(|b| b.is_changed())
+        || power.iter().any(|p| p.is_changed())
+    {
         *left = left.map(|n| n.max(1));
     }
     let both = left.iter().all(|&n| n > 1);
@@ -105,6 +109,8 @@ pub struct Params {
     pub map: Vec4,
     pub misc: Vec4,
     pub flicker: Vec4,
+    /// x: 1, everything is seen (the sim's free camera).
+    pub view: Vec4,
     pub torches: [Vec4; MAX_TORCHES],
     pub lights: [Vec4; 2 * MAX_LIGHTS],
 }
@@ -166,6 +172,8 @@ pub struct WorldMaterials {
     pub doors: Handle<Image>,
     /// Per tile, a smash's reach: sixteenths of a tile left (r), how strongly shown (g). Rewritten every frame.
     pub heard: Handle<Image>,
+    /// Per tile: tall object, indoor, half-height object, lit (a). Rewritten as lights switch.
+    pub extra: Handle<Image>,
 }
 
 fn grid_image(map: &Map, texel: impl Fn(i32, i32) -> [u8; 4]) -> Image {
@@ -221,7 +229,7 @@ pub fn spawn_map(
     let heard = images.add(heard);
     world_materials.heard = heard.clone();
     let lit = map.lit();
-    let extra = images.add(grid_image(map, |x, y| {
+    let mut extra = grid_image(map, |x, y| {
         let i = map.idx(x, y);
         let indoor = if map.at(x, y).indoor { 255 } else { 0 };
         [
@@ -230,7 +238,10 @@ pub fn spawn_map(
             half.objects[i],
             if lit[i] { 255 } else { 0 },
         ]
-    }));
+    });
+    extra.asset_usage = RenderAssetUsages::default();
+    let extra = images.add(extra);
+    world_materials.extra = extra.clone();
     if map.lights.len() > MAX_LIGHTS {
         warn!("{} lamps, only {MAX_LIGHTS} light", map.lights.len());
     }
@@ -249,6 +260,7 @@ pub fn spawn_map(
                 map: vec4(map.w as f32, map.h as f32, TILE, 0.0),
                 misc: vec4(mode, lamps, 0.0, 0.0),
                 flicker: Vec4::ZERO,
+                view: Vec4::ZERO,
                 torches: [Vec4::ZERO; MAX_TORCHES],
                 lights,
             },
@@ -265,6 +277,8 @@ pub fn spawn_map(
     let ground = material(0.0, &baked[0]);
     let things = material(1.0, &baked[1]);
     world_materials.all = vec![ground.clone(), things.clone(), material(2.0, &baked[1])];
+    let bakers = [0, 1].map(|i| material(3.0 + i as f32, &baked[1 - i]));
+    world_materials.all.extend(bakers.iter().cloned());
 
     let size = vec2(map.w as f32, map.h as f32) * TILE;
     let centre = Transform::from_xyz(size.x * 0.5, size.y * 0.5, 0.0);
@@ -282,7 +296,7 @@ pub fn spawn_map(
         commands.spawn((
             WorldPart,
             Mesh2d(whole.clone()),
-            MeshMaterial2d(material(3.0 + i as f32, &baked[1 - i])),
+            MeshMaterial2d(bakers[i].clone()),
             centre,
             only.clone(),
         ));
@@ -356,6 +370,7 @@ pub fn write_params(
     heading: f32,
     torch: bool,
     crouch: bool,
+    see_all: bool,
     flicker: Vec4,
     torches: &[Vec4],
     world_materials: &WorldMaterials,
@@ -371,6 +386,7 @@ pub fn write_params(
         p.misc.w = if crouch { 1.0 } else { 0.0 };
         p.map.w = torches.len().min(MAX_TORCHES) as f32;
         p.flicker = flicker;
+        p.view.x = if see_all { 1.0 } else { 0.0 };
         for (t, &at) in p.torches.iter_mut().zip(torches) {
             *t = at;
         }

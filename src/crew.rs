@@ -111,17 +111,31 @@ pub struct NextSeed(pub u64);
 #[derive(Resource, Clone, PartialEq)]
 pub struct Settings(pub Look);
 
+/// How loud this machine plays, 0 to 1 (the Esc menu's), saved beside the look.
+#[derive(Resource, Clone, Copy, PartialEq)]
+pub struct SoundLevel(pub f32);
+
 pub struct CrewPlugin;
 
 impl Plugin for CrewPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            (alone, looks, readies, leaves, start, finish)
+            (
+                alone,
+                looks,
+                readies,
+                leaves,
+                start,
+                // The sim's bank stays, with or without hunters.
+                finish.run_if(|mode: Res<Mode>| *mode != Mode::Sim),
+            )
                 .run_if(in_state(ClientState::Disconnected)),
         );
         if crate::drawn(app) {
-            app.insert_resource(Settings(load()))
+            let (look, level) = load();
+            app.insert_resource(Settings(look))
+                .insert_resource(SoundLevel(level))
                 .add_systems(Update, (introduce, save));
         }
     }
@@ -322,9 +336,11 @@ fn path() -> Option<PathBuf> {
     Some(base.join("grimgobber").join("player.txt"))
 }
 
-/// The saved look, or the default: lines of `name=`, `colour=`, `outfit=`.
-fn load() -> Look {
+/// The saved look and sound level, or the defaults: lines of `name=`,
+/// `colour=`, `outfit=`, `volume=` (percent, 80 unless saved).
+fn load() -> (Look, f32) {
     let mut look = Look::default();
+    let mut level = 0.8;
     let text = path()
         .and_then(|p| std::fs::read_to_string(p).ok())
         .unwrap_or_default();
@@ -339,23 +355,31 @@ fn load() -> Look {
                     look.outfit = o;
                 }
             }
+            Some(("volume", v)) => {
+                level = v
+                    .trim()
+                    .parse::<f32>()
+                    .map_or(level, |p| (p / 100.0).clamp(0.0, 1.0));
+            }
             _ => {}
         }
     }
-    look
+    (look, level)
 }
 
-/// A changed look is saved, and sent to the server.
-fn save(settings: Res<Settings>, mut set: MessageWriter<SetLook>) {
-    if !settings.is_changed() || settings.is_added() {
+/// A changed look or sound level is saved; a look is sent to the server.
+fn save(settings: Res<Settings>, level: Res<SoundLevel>, mut set: MessageWriter<SetLook>) {
+    let look = settings.is_changed() && !settings.is_added();
+    if !look && !(level.is_changed() && !level.is_added()) {
         return;
     }
     let l = &settings.0;
     let text = format!(
-        "name={}\ncolour={}\noutfit={}\n",
+        "name={}\ncolour={}\noutfit={}\nvolume={:.0}\n",
         l.name,
         l.colour,
-        l.outfit.name()
+        l.outfit.name(),
+        level.0 * 100.0
     );
     if let Some(p) = path()
         && let Some(dir) = p.parent()
@@ -364,5 +388,7 @@ fn save(settings: Res<Settings>, mut set: MessageWriter<SetLook>) {
     {
         warn!("could not save {}: {e}", p.display());
     }
-    set.write(SetLook(l.clone()));
+    if look {
+        set.write(SetLook(l.clone()));
+    }
 }
