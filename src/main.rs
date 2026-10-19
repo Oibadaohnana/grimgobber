@@ -87,7 +87,7 @@ fn main() {
         let smoke = dev::smoke_frames().is_some();
         app.add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                title: "Bank Bobbery".into(),
+                title: "Grimgobber".into(),
                 resolution: WindowResolution::new(w, h),
                 present_mode: if smoke {
                     PresentMode::AutoNoVsync

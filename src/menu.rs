@@ -771,7 +771,7 @@ fn lines(
         set(field, format!("{}_", settings.0.name));
     }
     let word = match (alone, ready_now) {
-        (true, false) => "Start the heist",
+        (true, false) => "Start the hunt",
         (true, true) => "Starting...",
         (false, false) => "Ready",
         (false, true) => "Not ready",

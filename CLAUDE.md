@@ -9,9 +9,7 @@ It was forked from the Bank Bobbery remake, `../bankbobbery2` (the JS
 original is `../bankbobbery`), a heist game that is still its own project:
 work on Grimgobber happens here, never there. The players are ghost
 hunters, but the code still says robber for one (`paint::robber`, the
-prose below), and a few heist leftovers remain: the window title
-("Bank Bobbery"), the lobby's "Start the heist", Cargo.toml's description,
-and the robbers' clothes (mask, swag bag).
+prose below), and they still wear the robbers' clothes (mask, swag bag).
 
 ## Code style
 
@@ -194,9 +192,10 @@ drawing and sound). Then:
   `Controls` too. The robber's tools are `Part::Tool`, shown while held.
 - **Thickets and bushes are hideouts** (`PropKind::is_hideout`): not solid,
   so he walks in, but placed like a solid prop and their tiles kept clear.
-  The wraith sees no one through one (`Level::screened`), and one in one
-  (`Level::hideout`) only from beside it: it finds him there only by
-  hunting to where it last saw him, if that was going in.
+  The wraith sees no one through one (`Level::screened`) or in one
+  (`Level::hideout`), nor hears his feet there; a hunt that had him as he
+  went in follows him in (`Mind::follows`). A noise gives away only a
+  robber within `MADE` of it, not whoever is nearest.
 - **A robber is an entity**: `Player` (his body) with `Controls`,
   `Inventory`, `Shown`, `Reach`, `Swing`, `Gunplay` and `Sanity` beside it, so there
   can be several. `LocalPlayer` marks the one this machine plays; input,

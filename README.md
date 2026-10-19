@@ -112,8 +112,9 @@ against their sanity: a haunt at 3% sane, 53% at none.
 - **Plants to hide in.** Big potted palms stand in the lobby and offices,
   planters of tall, dense plants line some walls, and bushes grow outside.
   Walk into one, at half pace through the leaves, and you are hidden (the
-  HUD says so): the wraith sees nobody through one, and someone in one only
-  from right beside it. If it saw you go in, a hunt follows you there.
+  HUD says so): the wraith sees nobody through one or in one, and your feet
+  are silent there. Only a hunt that had you as you went in follows you in;
+  a noise you make (a shot) still gives you away.
 
 ## Moving and gear
 
